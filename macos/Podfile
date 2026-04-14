@@ -1,0 +1,60 @@
+require 'fileutils'
+require 'pathname'
+
+ws_dir = Pathname.new(__dir__)
+ws_dir = ws_dir.parent until
+  File.exist?("#{ws_dir}/node_modules/react-native-macos/scripts/react_native_pods.rb") ||
+  ws_dir.expand_path.to_s == '/'
+require "#{ws_dir}/node_modules/react-native-macos/scripts/react_native_pods.rb"
+
+prepare_react_native_project!
+
+target 'Granolav2RN-macOS' do
+  platform :macos, '14.0'
+  use_native_modules!
+
+  # Flags change depending on the env values.
+  flags = get_default_flags()
+
+  use_react_native!(
+    :path => '../node_modules/react-native-macos',
+    :fabric_enabled => ENV['RCT_NEW_ARCH_ENABLED'] == '1',
+    # An absolute path to your application root.
+    :app_path => "#{Pod::Config.instance.installation_root}/.."
+  )
+
+  post_install do |installer|
+    react_native_post_install(installer)
+
+    # fmt's consteval path currently trips newer Apple Clang builds; disable it
+    # for the pod instead of broadening the workaround across the whole project.
+    installer.pods_project.targets.each do |target|
+      next unless target.name == 'fmt'
+
+      target.build_configurations.each do |config|
+        definitions = config.build_settings['GCC_PREPROCESSOR_DEFINITIONS'] || ['$(inherited)']
+        definitions = [definitions] unless definitions.is_a?(Array)
+        definitions << 'FMT_USE_CONSTEVAL=0' unless definitions.include?('FMT_USE_CONSTEVAL=0')
+        config.build_settings['GCC_PREPROCESSOR_DEFINITIONS'] = definitions
+      end
+    end
+
+    fmt_base_header = File.join(installer.sandbox.root, 'fmt', 'include', 'fmt', 'base.h')
+    if File.exist?(fmt_base_header)
+      header_contents = File.read(fmt_base_header)
+      old_snippet = <<~TEXT
+        #elif defined(__apple_build_version__) && __apple_build_version__ < 14000029L
+        #  define FMT_USE_CONSTEVAL 0  // consteval is broken in Apple clang < 14.
+      TEXT
+      new_snippet = <<~TEXT
+        #elif defined(__apple_build_version__)
+        #  define FMT_USE_CONSTEVAL 0  // disabled for current Apple clang toolchains.
+      TEXT
+
+      if header_contents.include?(old_snippet)
+        FileUtils.chmod('u+w', fmt_base_header)
+        File.write(fmt_base_header, header_contents.sub(old_snippet, new_snippet))
+      end
+    end
+  end
+end
