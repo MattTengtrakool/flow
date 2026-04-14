@@ -14,9 +14,9 @@
 
 - (void)applicationDidFinishLaunching:(NSNotification *)notification
 {
-  NSLog(@"[Granolav2] applicationDidFinishLaunching");
+  NSLog(@"[Flow] applicationDidFinishLaunching");
   self.automaticallyLoadReactNativeWindow = NO;
-  self.moduleName = @"Granolav2RN";
+  self.moduleName = @"Flow";
   self.initialProps = @{};
   self.dependencyProvider = [RCTAppDependencyProvider new];
 
@@ -44,12 +44,12 @@
 
 - (void)configureStatusItem
 {
-  NSLog(@"[Granolav2] configureStatusItem");
+  NSLog(@"[Flow] configureStatusItem");
   self.statusItem = [NSStatusBar.systemStatusBar statusItemWithLength:NSVariableStatusItemLength];
   self.statusItem.visible = YES;
 
   if (self.statusItem.button != nil) {
-    NSImage *icon = [NSImage imageWithSystemSymbolName:@"record.circle" accessibilityDescription:@"Granolav2"];
+    NSImage *icon = [NSImage imageWithSystemSymbolName:@"record.circle" accessibilityDescription:@"Flow"];
 
     if (icon != nil) {
       [icon setTemplate:YES];
@@ -58,13 +58,13 @@
 
     self.statusItem.button.imagePosition = NSImageLeading;
     self.statusItem.button.title = @"Gran";
-    self.statusItem.button.toolTip = @"Granolav2";
-    NSLog(@"[Granolav2] status item button created with title %@", self.statusItem.button.title);
+    self.statusItem.button.toolTip = @"Flow";
+    NSLog(@"[Flow] status item button created with title %@", self.statusItem.button.title);
   } else {
-    NSLog(@"[Granolav2] status item button is nil");
+    NSLog(@"[Flow] status item button is nil");
   }
 
-  NSMenu *menu = [[NSMenu alloc] initWithTitle:@"Granolav2"];
+  NSMenu *menu = [[NSMenu alloc] initWithTitle:@"Flow"];
 
   NSMenuItem *openDebugWindowItem = [[NSMenuItem alloc] initWithTitle:@"Open Debug Window"
                                                                action:@selector(openDebugWindow:)
@@ -106,7 +106,7 @@
                                                    backing:NSBackingStoreBuffered
                                                      defer:NO];
 
-  window.title = @"Granolav2 Debug";
+  window.title = @"Flow Debug";
   window.releasedWhenClosed = NO;
   window.minSize = NSMakeSize(960, 720);
   window.contentView = [self createReactDebugContentView];

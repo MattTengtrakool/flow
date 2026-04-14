@@ -15,7 +15,7 @@ RCT_EXPORT_MODULE();
       URLsForDirectory:NSApplicationSupportDirectory
              inDomains:NSUserDomainMask];
   NSURL *appSupportDirectory = appSupportDirectories.firstObject;
-  NSURL *directoryURL = [appSupportDirectory URLByAppendingPathComponent:@"Granolav2" isDirectory:YES];
+  NSURL *directoryURL = [appSupportDirectory URLByAppendingPathComponent:@"Flow" isDirectory:YES];
 
   return directoryURL.path;
 }
@@ -71,7 +71,7 @@ RCT_REMAP_METHOD(loadEventLog,
   }
 
   if (![json isKindOfClass:[NSArray class]]) {
-    NSError *shapeError = [NSError errorWithDomain:@"Granolav2EventLog"
+    NSError *shapeError = [NSError errorWithDomain:@"FlowEventLog"
                                               code:1001
                                           userInfo:@{
                                             NSLocalizedDescriptionKey: @"The event log file does not contain an array."
@@ -99,7 +99,7 @@ RCT_REMAP_METHOD(saveEventLog,
   }
 
   if (![NSJSONSerialization isValidJSONObject:eventLog]) {
-    NSError *serializationError = [NSError errorWithDomain:@"Granolav2EventLog"
+    NSError *serializationError = [NSError errorWithDomain:@"FlowEventLog"
                                                       code:1002
                                                   userInfo:@{
                                                     NSLocalizedDescriptionKey: @"The event log contains non-JSON values."

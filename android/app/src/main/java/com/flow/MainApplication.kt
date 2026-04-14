@@ -1,4 +1,4 @@
-package com.granolav2rn
+package com.flow
 
 import android.app.Application
 import com.facebook.react.PackageList

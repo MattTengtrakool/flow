@@ -1,77 +1,89 @@
-# Granolav2
+# Flow
 
-This workspace now uses the React Native macOS app directly at the repo root.
+A macOS menu bar app that passively observes your screen context and generates structured observations about your work using AI. Built with React Native macOS.
 
-## Run the app
+Flow sits quietly in your menu bar, captures what you're working on, and produces machine-readable observations that can power task clustering, time tracking, and work pattern analysis.
 
-1. Open Terminal.
-2. `cd /Users/matthewtengtrakool/Desktop/Granolav2`
-3. Make sure Node 22 is active:
-   `export PATH="/opt/homebrew/opt/node@22/bin:$PATH"`
-4. Verify it:
-   `node -v`
-5. Start Metro:
-   `npm start`
-6. In another Terminal tab, run:
-   `open /Users/matthewtengtrakool/Desktop/Granolav2/macos/Granolav2RN.xcworkspace`
-7. In Xcode, select the `Granolav2RN-macOS` scheme and run it on `My Mac`.
+## Features
 
-If `npm start` ever mentions `styleText`, your shell is still on the wrong Node version.
+- **Passive context capture** -- tracks the active app, window title, and screen region without interrupting your workflow
+- **Precise mode** -- uses macOS Accessibility APIs for fine-grained window metadata when granted permission
+- **AI-powered observations** -- sends screenshots and metadata through a strict JSON schema to produce structured, validated observations
+- **Fixture-based evaluation** -- save real captures as fixtures, re-run them later, and score observations for usefulness, confidence, and sensitivity
+- **Local-first storage** -- all data (event log, settings, fixtures) is persisted locally in Application Support
 
-## Current Stage
+## Requirements
 
-- The app launches as a macOS debug-first menu bar app.
-- Passive context, precise mode, target inspection, and one-shot capture are wired up.
-- The debug window is now a focused observation lab instead of the earlier all-in-one debug surface.
-- Real observations are generated from screenshot plus metadata through a strict JSON schema.
-- Fixtures can be saved locally, rerun later, and manually scored for usefulness, confidence, and sensitivity.
-- The older append-only event log is still present behind the scenes and continues to persist locally.
+- macOS 14.0+
+- Node.js 22+
+- Xcode 15+
+- CocoaPods
 
-## Stage 8 Test Loop
+## Getting Started
 
-1. Start Metro and run the macOS app from Xcode.
-2. In the app, grant `Accessibility` and `Screen Recording`.
-3. Paste an OpenAI API key into the observation settings box and save it locally.
-4. Click `Inspect Capture Target`, then `Capture Now`.
-5. Click `Observe Last Capture` and review the strict JSON output.
-6. Save good screenshots as fixtures.
-7. Run saved fixtures again and score:
-   - usefulness
-   - confidence
-   - sensitivity
-8. Once you have 50-100 fixtures, the fixture summary becomes the quick signal for whether the observation schema is good enough for clustering.
+```bash
+# Install dependencies
+npm install
 
-## Architecture
+# Install native pods
+cd macos && pod install && cd ..
 
-- Source of truth for timeline history: append-only event log
-- Derived view: current in-memory timeline rebuilt from the event log
-- Real observation path: screenshot + capture metadata + context metadata -> strict JSON observation
-- Evaluation path: save fixture -> rerun fixture -> score usefulness/confidence/sensitivity
-- Local storage boundaries:
-  - event log
-  - observation settings
-  - saved fixtures
+# Start Metro bundler
+npm start
+```
 
-The mental model is:
+Then open `macos/Flow.xcworkspace` in Xcode, select the **Flow-macOS** scheme, and run.
 
-1. Capture a screenshot.
-2. Send the screenshot plus metadata to the observation engine.
-3. Validate the returned JSON against the strict schema.
-4. Save fixtures that represent real work.
-5. Re-run fixtures and score them.
-6. Use those scores to decide whether observations are good enough for task clustering.
+On first launch, grant **Accessibility** and **Screen Recording** permissions when prompted.
 
-## Main Files
+## How It Works
 
-- Native menu bar startup: `macos/Granolav2RN-macOS/AppDelegate.mm`
-- Native event-log persistence: `macos/Granolav2RN-macOS/EventLogStorage.mm`
-- Native observation settings + fixture storage: `macos/Granolav2RN-macOS/ObservationLabStorage.mm`
-- React Native observation lab UI: `App.tsx`
-- Observation lab hook: `src/observation/useObservationLab.ts`
-- Observation engine: `src/observation/openaiObservationEngine.ts`
-- Observation schema and validation: `src/observation/schema.ts`
-- Event types and replay logic: `src/state/eventLog.ts`
-- App state hook and command handlers: `src/state/useEventSourcedTimeline.ts`
-- JS storage boundary: `src/storage/eventLogStorage.ts`
-- JS observation storage boundary: `src/storage/observationLabStorage.ts`
-- React Native macOS workspace: `macos/Granolav2RN.xcworkspace`
+```
+Screen context  -->  Screenshot + metadata  -->  Observation engine  -->  Structured JSON
+                                                      |
+                                              Validated against
+                                              a strict schema
+```
+
+1. Flow monitors the frontmost application and window via macOS APIs
+2. On capture, it takes a screenshot of the target window or app
+3. The screenshot and context metadata are sent to an observation engine
+4. The engine returns structured JSON validated against a strict schema
+5. Observations can be saved as fixtures for evaluation and scoring
+
+### Storage
+
+All data stays on your machine:
+
+| Boundary | Contents |
+|---|---|
+| Event log | Append-only timeline of all context changes |
+| Observation settings | API key, model preferences |
+| Fixtures | Saved captures with scores for evaluation |
+
+## Project Structure
+
+```
+App.tsx                          React Native entry point
+src/
+  observation/
+    useObservationLab.ts         Observation lab UI hook
+    openaiObservationEngine.ts   AI observation engine
+    schema.ts                    Observation schema & validation
+  state/
+    eventLog.ts                  Event types and replay logic
+    useEventSourcedTimeline.ts   App state and command handlers
+  storage/
+    eventLogStorage.ts           JS bridge to native event log
+    observationLabStorage.ts     JS bridge to native observation storage
+macos/
+  Flow-macOS/
+    AppDelegate.mm               Menu bar app setup
+    EventLogStorage.mm           Native event log persistence
+    ObservationLabStorage.mm     Native observation + fixture storage
+    ContextCaptureModule.mm      Screen context and capture engine
+```
+
+## License
+
+Private -- not yet licensed for distribution.

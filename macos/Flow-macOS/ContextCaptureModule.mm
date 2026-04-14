@@ -96,7 +96,7 @@ RCT_EXPORT_MODULE();
 
 - (NSString *)screenRecordingInactiveReason
 {
-  return @"Screen Recording access is not currently active. If you just granted it in System Settings, quit and relaunch Granolav2 once, then try again.";
+  return @"Screen Recording access is not currently active. If you just granted it in System Settings, quit and relaunch Flow once, then try again.";
 }
 
 - (NSString *)normalizedString:(NSString *)value

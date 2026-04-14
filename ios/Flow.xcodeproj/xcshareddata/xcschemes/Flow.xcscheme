@@ -15,9 +15,9 @@
             <BuildableReference
                BuildableIdentifier = "primary"
                BlueprintIdentifier = "13B07F861A680F5B00A75B9A"
-               BuildableName = "Granolav2RN.app"
-               BlueprintName = "Granolav2RN"
-               ReferencedContainer = "container:Granolav2RN.xcodeproj">
+               BuildableName = "Flow.app"
+               BlueprintName = "Flow"
+               ReferencedContainer = "container:Flow.xcodeproj">
             </BuildableReference>
          </BuildActionEntry>
       </BuildActionEntries>
@@ -33,9 +33,9 @@
             <BuildableReference
                BuildableIdentifier = "primary"
                BlueprintIdentifier = "00E356ED1AD99517003FC87E"
-               BuildableName = "Granolav2RNTests.xctest"
-               BlueprintName = "Granolav2RNTests"
-               ReferencedContainer = "container:Granolav2RN.xcodeproj">
+               BuildableName = "FlowTests.xctest"
+               BlueprintName = "FlowTests"
+               ReferencedContainer = "container:Flow.xcodeproj">
             </BuildableReference>
          </TestableReference>
       </Testables>
@@ -55,9 +55,9 @@
          <BuildableReference
             BuildableIdentifier = "primary"
             BlueprintIdentifier = "13B07F861A680F5B00A75B9A"
-            BuildableName = "Granolav2RN.app"
-            BlueprintName = "Granolav2RN"
-            ReferencedContainer = "container:Granolav2RN.xcodeproj">
+            BuildableName = "Flow.app"
+            BlueprintName = "Flow"
+            ReferencedContainer = "container:Flow.xcodeproj">
          </BuildableReference>
       </BuildableProductRunnable>
    </LaunchAction>
@@ -72,9 +72,9 @@
          <BuildableReference
             BuildableIdentifier = "primary"
             BlueprintIdentifier = "13B07F861A680F5B00A75B9A"
-            BuildableName = "Granolav2RN.app"
-            BlueprintName = "Granolav2RN"
-            ReferencedContainer = "container:Granolav2RN.xcodeproj">
+            BuildableName = "Flow.app"
+            BlueprintName = "Flow"
+            ReferencedContainer = "container:Flow.xcodeproj">
          </BuildableReference>
       </BuildableProductRunnable>
    </ProfileAction>

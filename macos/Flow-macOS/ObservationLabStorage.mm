@@ -15,7 +15,7 @@ RCT_EXPORT_MODULE();
       URLsForDirectory:NSApplicationSupportDirectory
              inDomains:NSUserDomainMask];
   NSURL *appSupportDirectory = appSupportDirectories.firstObject;
-  NSURL *directoryURL = [appSupportDirectory URLByAppendingPathComponent:@"Granolav2" isDirectory:YES];
+  NSURL *directoryURL = [appSupportDirectory URLByAppendingPathComponent:@"Flow" isDirectory:YES];
 
   return directoryURL.path;
 }
@@ -99,7 +99,7 @@ RCT_REMAP_METHOD(loadObservationSettings,
   }
 
   if (![json isKindOfClass:[NSDictionary class]]) {
-    NSError *shapeError = [NSError errorWithDomain:@"Granolav2ObservationSettings"
+    NSError *shapeError = [NSError errorWithDomain:@"FlowObservationSettings"
                                               code:2001
                                           userInfo:@{
                                             NSLocalizedDescriptionKey: @"The observation settings file does not contain an object."
@@ -127,7 +127,7 @@ RCT_REMAP_METHOD(saveObservationSettings,
   }
 
   if (![NSJSONSerialization isValidJSONObject:settings]) {
-    NSError *serializationError = [NSError errorWithDomain:@"Granolav2ObservationSettings"
+    NSError *serializationError = [NSError errorWithDomain:@"FlowObservationSettings"
                                                       code:2002
                                                   userInfo:@{
                                                     NSLocalizedDescriptionKey: @"The observation settings contain non-JSON values."
@@ -233,7 +233,7 @@ RCT_REMAP_METHOD(saveObservationFixture,
   }
 
   if (![NSJSONSerialization isValidJSONObject:fixture]) {
-    NSError *serializationError = [NSError errorWithDomain:@"Granolav2ObservationFixture"
+    NSError *serializationError = [NSError errorWithDomain:@"FlowObservationFixture"
                                                       code:2003
                                                   userInfo:@{
                                                     NSLocalizedDescriptionKey: @"The observation fixture contains non-JSON values."
@@ -245,7 +245,7 @@ RCT_REMAP_METHOD(saveObservationFixture,
   NSString *fixtureId = fixture[@"id"];
 
   if (![fixtureId isKindOfClass:[NSString class]] || fixtureId.length == 0) {
-    NSError *shapeError = [NSError errorWithDomain:@"Granolav2ObservationFixture"
+    NSError *shapeError = [NSError errorWithDomain:@"FlowObservationFixture"
                                               code:2004
                                           userInfo:@{
                                             NSLocalizedDescriptionKey: @"The observation fixture must include a string id."

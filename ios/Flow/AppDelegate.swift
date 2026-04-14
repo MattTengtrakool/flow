@@ -24,7 +24,7 @@ class AppDelegate: UIResponder, UIApplicationDelegate {
     window = UIWindow(frame: UIScreen.main.bounds)
 
     factory.startReactNative(
-      withModuleName: "Granolav2RN",
+      withModuleName: "Flow",
       in: window,
       launchOptions: launchOptions
     )

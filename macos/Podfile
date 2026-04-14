@@ -9,7 +9,7 @@ require "#{ws_dir}/node_modules/react-native-macos/scripts/react_native_pods.rb"
 
 prepare_react_native_project!
 
-target 'Granolav2RN-macOS' do
+target 'Flow-macOS' do
   platform :macos, '14.0'
   use_native_modules!
 
