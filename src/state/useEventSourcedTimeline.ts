@@ -13,7 +13,6 @@ import {
   inspectCaptureTarget,
   requestAccessibilityPrompt,
   requestScreenCaptureAccess,
-  setNativePreciseModeEnabled,
   startContextMonitoring,
   stopContextMonitoring,
 } from '../native/contextCaptureBridge';
@@ -41,6 +40,23 @@ const OBSERVATION_TEMPLATES = [
   'Captured a synthetic observation for the event log pipeline.',
   'Validated that the timeline can rebuild from immutable events.',
 ];
+
+const PERCEPTUAL_HASH_DISTANCE_THRESHOLD = 10;
+
+function hammingDistance(a: string, b: string): number {
+  if (a.length !== b.length) {
+    return Infinity;
+  }
+
+  let distance = 0;
+
+  for (let i = 0; i < a.length; i += 1) {
+    const xor = parseInt(a[i], 16) ^ parseInt(b[i], 16);
+    distance += ((xor >> 3) & 1) + ((xor >> 2) & 1) + ((xor >> 1) & 1) + (xor & 1);
+  }
+
+  return distance;
+}
 
 const DEFAULT_PERMISSIONS: PermissionsStatus = {
   accessibilityTrusted: false,
@@ -74,6 +90,7 @@ type CapturePreviewState = {
   dataUri: string | null;
   mimeType: string | null;
   metadata: CaptureMetadataPayload;
+  ocrText: string | null;
 };
 
 type ActionFeedback = {
@@ -264,7 +281,6 @@ function createActionFeedback(
 export function useEventSourcedTimeline() {
   const [store, dispatch] = useReducer(timelineReducer, INITIAL_STORE);
   const [monitoringEnabled, setMonitoringEnabled] = useState(false);
-  const [preciseModeEnabled, setPreciseModeEnabled] = useState(false);
   const [permissions, setPermissions] = useState<PermissionsStatus>(
     DEFAULT_PERMISSIONS,
   );
@@ -281,6 +297,7 @@ export function useEventSourcedTimeline() {
   );
   const lastPreviewDataUriRef = useRef<string | null>(null);
   const lastScheduledFrameHashRef = useRef<string | null>(null);
+  const lastScheduledPerceptualHashRef = useRef<string | null>(null);
   const schedulerBusyRef = useRef(false);
 
   const appendEvent = useStableEvent((event: DomainEvent) => {
@@ -407,14 +424,13 @@ export function useEventSourcedTimeline() {
     async function startMonitoring() {
       try {
         const snapshot = await startContextMonitoring({
-          preciseModeEnabled: false,
+          preciseModeEnabled: true,
           idleThresholdSeconds: 60,
         });
 
         if (!isCancelled) {
           startTransition(() => {
             setMonitoringEnabled(true);
-            setPreciseModeEnabled(false);
           });
           handleContextSnapshot(snapshot);
         }
@@ -618,43 +634,6 @@ export function useEventSourcedTimeline() {
     });
   }
 
-  async function applyPreciseMode(nextValue: boolean) {
-    startTransition(() => {
-      setPreciseModeEnabled(nextValue);
-    });
-
-    if (!monitoringEnabled) {
-      return;
-    }
-
-    try {
-      const snapshot = await setNativePreciseModeEnabled(nextValue);
-      handleContextSnapshot(snapshot);
-      startTransition(() => {
-        setActionFeedback(
-          createActionFeedback(
-            nextValue
-              ? snapshot.source === 'window'
-                ? 'Precise mode is on and window-level context is coming through.'
-                : 'Precise mode is on, but the current app is still only giving app-level context.'
-              : 'Precise mode is off. The app is using app-level context only.',
-            nextValue && snapshot.source !== 'window' ? 'warning' : 'success',
-          ),
-        );
-      });
-    } catch (error) {
-      const message =
-        error instanceof Error
-          ? error.message
-          : 'Failed to update precise mode.';
-
-      startTransition(() => {
-        setNativeErrorMessage(message);
-        setActionFeedback(createActionFeedback(message, 'error'));
-      });
-    }
-  }
-
   async function promptForAccessibility() {
     try {
       const nextPermissions = await requestAccessibilityPrompt();
@@ -782,6 +761,7 @@ export function useEventSourcedTimeline() {
           dataUri: previewDataUri,
           mimeType: result.previewMimeType,
           metadata: captureMetadata,
+          ocrText: result.ocrText,
         });
         setNativeErrorMessage(null);
         setActionFeedback(
@@ -851,16 +831,23 @@ export function useEventSourcedTimeline() {
         lastPreviewDataUriRef.current,
       );
       const frameHash = captureMetadata.frameHash;
+      const perceptualHash = captureMetadata.perceptualHash;
+      const isPerceptuallySimilar =
+        perceptualHash != null &&
+        lastScheduledPerceptualHashRef.current != null &&
+        hammingDistance(perceptualHash, lastScheduledPerceptualHashRef.current) <=
+          PERCEPTUAL_HASH_DISTANCE_THRESHOLD;
       const didChange =
         captureMetadata.status === 'captured' &&
-        frameHash != null &&
-        frameHash.length > 0 &&
-        frameHash !== lastScheduledFrameHashRef.current;
+        perceptualHash != null &&
+        perceptualHash.length > 0 &&
+        !isPerceptuallySimilar;
 
       lastPreviewDataUriRef.current = previewDataUri;
 
       if (didChange) {
         lastScheduledFrameHashRef.current = frameHash;
+        lastScheduledPerceptualHashRef.current = perceptualHash;
 
         appendEvent({
           id: createDomainId('event'),
@@ -881,6 +868,7 @@ export function useEventSourcedTimeline() {
             dataUri: previewDataUri,
             mimeType: result.previewMimeType,
             metadata: captureMetadata,
+            ocrText: result.ocrText,
           });
           setNativeErrorMessage(null);
         }
@@ -939,6 +927,7 @@ export function useEventSourcedTimeline() {
 
   function startScheduler() {
     lastScheduledFrameHashRef.current = null;
+    lastScheduledPerceptualHashRef.current = null;
     startTransition(() => {
       setSchedulerState(previousState => ({
         ...previousState,
@@ -967,7 +956,6 @@ export function useEventSourcedTimeline() {
   return {
     ...store,
     monitoringEnabled,
-    preciseModeEnabled,
     permissions,
     latestInspection,
     latestCapturePreview,
@@ -984,7 +972,6 @@ export function useEventSourcedTimeline() {
     deleteObservation,
     recordStructuredObservation,
     rebuildFromEventLog,
-    setPreciseModeEnabled: applyPreciseMode,
     promptForAccessibility,
     requestScreenCapturePermission,
     runCaptureInspection,

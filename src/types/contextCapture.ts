@@ -68,6 +68,7 @@ export type CaptureMetadataPayload = {
   width: number | null;
   height: number | null;
   frameHash: string | null;
+  perceptualHash: string | null;
   errorMessage: string | null;
   previewByteLength: number;
   staleFrame: boolean;
@@ -86,4 +87,5 @@ export type CaptureResultPayload = {
   metadata: Omit<CaptureMetadataPayload, 'staleFrame' | 'blankFrame'>;
   previewBase64: string | null;
   previewMimeType: string | null;
+  ocrText: string | null;
 };

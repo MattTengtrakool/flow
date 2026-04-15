@@ -8,8 +8,8 @@ import {
 import {useEventSourcedTimeline} from '../state/useEventSourcedTimeline';
 import {
   DEFAULT_OBSERVATION_MODEL,
-  generateObservationWithOpenAI,
-} from './openaiObservationEngine';
+  generateObservation,
+} from './geminiObservationEngine';
 import {createFixtureRatingSummary} from './fixtureSummary';
 import type {
   ObservationFixtureRating,
@@ -275,11 +275,12 @@ export function useObservationLab() {
     setObservationBusy(true);
 
     try {
-      const run = await generateObservationWithOpenAI(
+      const run = await generateObservation(
         settings.apiKey,
         {
           imageBase64,
           imageMimeType,
+          ocrText: preview.ocrText ?? null,
           inspection: latestInspection,
           capture: preview.metadata,
           currentContext,
@@ -393,11 +394,12 @@ export function useObservationLab() {
     setFixtureBusy(true);
 
     try {
-      const run = await generateObservationWithOpenAI(
+      const run = await generateObservation(
         settings.apiKey,
         {
           imageBase64: fixture.imageBase64,
           imageMimeType: fixture.imageMimeType,
+          ocrText: null,
           inspection: fixture.inspection,
           capture: fixture.capture,
           currentContext: fixture.inspection.context,
@@ -454,11 +456,12 @@ export function useObservationLab() {
 
     for (const fixture of fixtures) {
       try {
-        const run = await generateObservationWithOpenAI(
+        const run = await generateObservation(
           settings.apiKey,
           {
             imageBase64: fixture.imageBase64,
             imageMimeType: fixture.imageMimeType,
+            ocrText: null,
             inspection: fixture.inspection,
             capture: fixture.capture,
             currentContext: fixture.inspection.context,

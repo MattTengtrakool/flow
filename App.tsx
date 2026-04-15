@@ -138,7 +138,6 @@ function App() {
   const {
     hydrationStatus,
     monitoringEnabled,
-    preciseModeEnabled,
     permissions,
     latestInspection,
     latestCapturePreview,
@@ -171,7 +170,6 @@ function App() {
     saveSelectedFixtureRating,
     fixtureSummary,
     labFeedback,
-    setPreciseModeEnabled,
     promptForAccessibility,
     requestScreenCapturePermission,
     runCaptureInspection,
@@ -274,10 +272,6 @@ function App() {
           label="Running App Path"
           value={formatNullable(permissions.hostBundlePath)}
         />
-        <LabelValue
-          label="Precise Mode"
-          value={preciseModeEnabled ? 'On' : 'Off'}
-        />
         <Text style={styles.fieldHelp}>
           `Inspect Capture Target` only works after `Screen Recording` shows
           `Granted`. If you just allowed it in System Settings, relaunch the app
@@ -288,16 +282,6 @@ function App() {
             label="Prompt Accessibility"
             onPress={promptForAccessibility}
             disabled={controlsDisabled}
-          />
-          <ActionButton
-            label={
-              preciseModeEnabled ? 'Disable Precise Mode' : 'Enable Precise Mode'
-            }
-            onPress={() => {
-              setPreciseModeEnabled(!preciseModeEnabled).catch(() => {});
-            }}
-            disabled={controlsDisabled}
-            tone="secondary"
           />
         </View>
         <View style={styles.buttonRow}>
@@ -362,7 +346,7 @@ function App() {
       <Section
         title="Observation Engine"
         subtitle="This is the new Stage 8 path: screenshot plus metadata goes to a real vision model and must come back as strict JSON.">
-        <Text style={styles.fieldLabel}>OpenAI API Key</Text>
+        <Text style={styles.fieldLabel}>Google AI API Key</Text>
         <TextInput
           autoCapitalize="none"
           autoCorrect={false}
@@ -373,10 +357,10 @@ function App() {
               apiKey: value,
             }));
           }}
-          placeholder="Paste your OpenAI API key here"
+          placeholder="Paste your Google AI API key here"
           style={[styles.input, styles.codeInput]}
           value={settings.apiKey}
-          testID="openai-api-key-input"
+          testID="gemini-api-key-input"
         />
         <Text style={styles.fieldHelp}>
           Paste your key into this box, then click `Save Settings`. It is stored
@@ -393,10 +377,10 @@ function App() {
               model: value,
             }));
           }}
-          placeholder="gpt-5-mini"
+          placeholder="gemini-2.5-flash-lite"
           style={[styles.input, styles.codeInput]}
           value={settings.model}
-          testID="openai-model-input"
+          testID="gemini-model-input"
         />
         <LabelValue label="Settings Path" value={formatNullable(settingsPath)} />
         <View style={styles.buttonRow}>

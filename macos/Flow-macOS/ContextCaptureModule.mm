@@ -6,6 +6,15 @@
 #import <CoreGraphics/CGWindow.h>
 #import <React/RCTBridgeModule.h>
 #import <ScreenCaptureKit/ScreenCaptureKit.h>
+#import <Vision/Vision.h>
+
+static const NSUInteger kMaxPreviewBytes = 524288;
+static const CGFloat kInitialJPEGQuality = 0.85;
+static const CGFloat kMinimumJPEGQuality = 0.1;
+static const CGFloat kQualityStep = 0.05;
+static const NSUInteger kMaxOCRTextLength = 4000;
+static const size_t kDHashWidth = 9;
+static const size_t kDHashHeight = 8;
 
 @interface ContextCaptureModule () <RCTBridgeModule>
 
@@ -908,14 +917,120 @@ RCT_REMAP_METHOD(inspectCaptureTarget,
   return hexString;
 }
 
-- (nullable NSData *)pngDataForImage:(CGImageRef)image
+- (nullable NSString *)dHashForImage:(CGImageRef)image
+{
+  if (image == nil) {
+    return nil;
+  }
+
+  CGColorSpaceRef graySpace = CGColorSpaceCreateDeviceGray();
+  size_t bytesPerRow = kDHashWidth;
+  uint8_t pixels[kDHashWidth * kDHashHeight];
+
+  CGContextRef context = CGBitmapContextCreate(
+      pixels,
+      kDHashWidth,
+      kDHashHeight,
+      8,
+      bytesPerRow,
+      graySpace,
+      kCGImageAlphaNone);
+
+  CGColorSpaceRelease(graySpace);
+
+  if (context == nil) {
+    return nil;
+  }
+
+  CGContextSetInterpolationQuality(context, kCGInterpolationMedium);
+  CGContextDrawImage(context, CGRectMake(0, 0, kDHashWidth, kDHashHeight), image);
+  CGContextRelease(context);
+
+  uint64_t hash = 0;
+
+  for (size_t row = 0; row < kDHashHeight; row += 1) {
+    for (size_t col = 0; col < kDHashWidth - 1; col += 1) {
+      uint8_t left = pixels[row * kDHashWidth + col];
+      uint8_t right = pixels[row * kDHashWidth + col + 1];
+
+      hash <<= 1;
+
+      if (left > right) {
+        hash |= 1;
+      }
+    }
+  }
+
+  return [NSString stringWithFormat:@"%016llx", (unsigned long long)hash];
+}
+
+- (nullable NSData *)jpegDataForImage:(CGImageRef)image maxBytes:(NSUInteger)maxBytes
 {
   if (image == nil) {
     return nil;
   }
 
   NSBitmapImageRep *bitmap = [[NSBitmapImageRep alloc] initWithCGImage:image];
-  return [bitmap representationUsingType:NSBitmapImageFileTypePNG properties:@{}];
+  CGFloat quality = kInitialJPEGQuality;
+
+  while (quality >= kMinimumJPEGQuality) {
+    NSData *data = [bitmap representationUsingType:NSBitmapImageFileTypeJPEG
+                                        properties:@{NSImageCompressionFactor: @(quality)}];
+
+    if (data.length <= maxBytes || quality <= kMinimumJPEGQuality) {
+      return data;
+    }
+
+    quality -= kQualityStep;
+  }
+
+  return [bitmap representationUsingType:NSBitmapImageFileTypeJPEG
+                              properties:@{NSImageCompressionFactor: @(kMinimumJPEGQuality)}];
+}
+
+- (nullable NSString *)recognizeTextInImage:(CGImageRef)image
+{
+  if (image == nil) {
+    return nil;
+  }
+
+  VNImageRequestHandler *handler =
+      [[VNImageRequestHandler alloc] initWithCGImage:image options:@{}];
+
+  __block NSMutableArray<NSString *> *lines = [NSMutableArray array];
+
+  VNRecognizeTextRequest *request =
+      [[VNRecognizeTextRequest alloc] initWithCompletionHandler:^(VNRequest *req, NSError *error) {
+        if (error != nil) {
+          return;
+        }
+
+        for (VNRecognizedTextObservation *observation in req.results) {
+          VNRecognizedText *topCandidate = [[observation topCandidates:1] firstObject];
+
+          if (topCandidate != nil && topCandidate.string.length > 0) {
+            [lines addObject:topCandidate.string];
+          }
+        }
+      }];
+
+  request.recognitionLevel = VNRequestTextRecognitionLevelAccurate;
+  request.usesLanguageCorrection = YES;
+
+  NSError *performError = nil;
+  [handler performRequests:@[request] error:&performError];
+
+  if (performError != nil || lines.count == 0) {
+    return nil;
+  }
+
+  NSString *joined = [lines componentsJoinedByString:@"\n"];
+
+  if (joined.length > kMaxOCRTextLength) {
+    return [joined substringToIndex:kMaxOCRTextLength];
+  }
+
+  return joined;
 }
 
 - (NSDictionary *)errorCaptureResultWithInspection:(NSDictionary *)inspection
@@ -941,11 +1056,13 @@ RCT_REMAP_METHOD(inspectCaptureTarget,
       @"width": NSNull.null,
       @"height": NSNull.null,
       @"frameHash": NSNull.null,
+      @"perceptualHash": NSNull.null,
       @"errorMessage": [self nullableValue:errorMessage],
       @"previewByteLength": @0
     },
     @"previewBase64": NSNull.null,
-    @"previewMimeType": NSNull.null
+    @"previewMimeType": NSNull.null,
+    @"ocrText": NSNull.null
   };
 }
 
@@ -1033,33 +1150,46 @@ RCT_REMAP_METHOD(captureNow,
                                    return;
                                  }
 
-                                 NSData *pngData = [self pngDataForImage:image];
-                                 NSString *base64 = pngData != nil ? [pngData base64EncodedStringWithOptions:0] : nil;
-                                 NSString *frameHash = pngData != nil ? [self sha256ForData:pngData] : nil;
-                                 NSDictionary *chosenTarget =
-                                     [inspection[@"chosenTarget"] isKindOfClass:NSDictionary.class] ? inspection[@"chosenTarget"] : @{};
+                                 CGImageRetain(image);
+                                 size_t imageWidth = CGImageGetWidth(image);
+                                 size_t imageHeight = CGImageGetHeight(image);
 
-                                 resolve(@{
-                                   @"inspection": inspection,
-                                   @"metadata": @{
-                                     @"capturedAt": [self currentTimestamp],
-                                     @"status": @"captured",
-                                     @"targetType": inspection[@"chosenTargetType"] ?: @"none",
-                                     @"appName": [self nullableValue:chosenTarget[@"appName"]],
-                                     @"bundleIdentifier": [self nullableValue:chosenTarget[@"bundleIdentifier"]],
-                                     @"processId": chosenTarget[@"processId"] ?: NSNull.null,
-                                     @"windowId": chosenTarget[@"windowId"] ?: NSNull.null,
-                                     @"windowTitle": [self nullableValue:chosenTarget[@"windowTitle"]],
-                                     @"displayId": chosenTarget[@"displayId"] ?: NSNull.null,
-                                     @"confidence": inspection[@"confidence"] ?: @0,
-                                     @"width": @(CGImageGetWidth(image)),
-                                     @"height": @(CGImageGetHeight(image)),
-                                     @"frameHash": [self nullableValue:frameHash],
-                                     @"errorMessage": NSNull.null,
-                                     @"previewByteLength": @(pngData.length)
-                                   },
-                                   @"previewBase64": [self nullableValue:base64],
-                                   @"previewMimeType": base64 != nil ? @"image/png" : NSNull.null
+                                 dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
+                                   NSData *jpegData = [self jpegDataForImage:image maxBytes:kMaxPreviewBytes];
+                                   NSString *ocrText = [self recognizeTextInImage:image];
+                                   NSString *perceptualHash = [self dHashForImage:image];
+
+                                   CGImageRelease(image);
+
+                                   NSString *base64 = jpegData != nil ? [jpegData base64EncodedStringWithOptions:0] : nil;
+                                   NSString *frameHash = jpegData != nil ? [self sha256ForData:jpegData] : nil;
+                                   NSDictionary *chosenTarget =
+                                       [inspection[@"chosenTarget"] isKindOfClass:NSDictionary.class] ? inspection[@"chosenTarget"] : @{};
+
+                                   resolve(@{
+                                     @"inspection": inspection,
+                                     @"metadata": @{
+                                       @"capturedAt": [self currentTimestamp],
+                                       @"status": @"captured",
+                                       @"targetType": inspection[@"chosenTargetType"] ?: @"none",
+                                       @"appName": [self nullableValue:chosenTarget[@"appName"]],
+                                       @"bundleIdentifier": [self nullableValue:chosenTarget[@"bundleIdentifier"]],
+                                       @"processId": chosenTarget[@"processId"] ?: NSNull.null,
+                                       @"windowId": chosenTarget[@"windowId"] ?: NSNull.null,
+                                       @"windowTitle": [self nullableValue:chosenTarget[@"windowTitle"]],
+                                       @"displayId": chosenTarget[@"displayId"] ?: NSNull.null,
+                                       @"confidence": inspection[@"confidence"] ?: @0,
+                                       @"width": @(imageWidth),
+                                       @"height": @(imageHeight),
+                                       @"frameHash": [self nullableValue:frameHash],
+                                       @"perceptualHash": [self nullableValue:perceptualHash],
+                                       @"errorMessage": NSNull.null,
+                                       @"previewByteLength": @(jpegData.length)
+                                     },
+                                     @"previewBase64": [self nullableValue:base64],
+                                     @"previewMimeType": base64 != nil ? @"image/jpeg" : NSNull.null,
+                                     @"ocrText": [self nullableValue:ocrText]
+                                   });
                                  });
                                }];
   }];

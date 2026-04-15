@@ -36,7 +36,7 @@ const nativeModule = NativeModules.ObservationLabStorage as
 const inMemoryState = {
   settings: {
     apiKey: '',
-    model: 'gpt-5-mini',
+    model: 'gemini-2.5-flash-lite',
     savedAt: null,
   } as ObservationSettings,
   fixtures: [] as ObservationFixtureRecord[],

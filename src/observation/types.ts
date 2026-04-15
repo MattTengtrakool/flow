@@ -59,6 +59,7 @@ export type ObservationRun = {
 export type ObservationEngineInput = {
   imageBase64: string;
   imageMimeType: string;
+  ocrText: string | null;
   inspection: CaptureInspectionPayload;
   capture: CaptureMetadataPayload;
   currentContext: ContextSnapshotPayload | null;

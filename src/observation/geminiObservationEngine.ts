@@ -6,52 +6,75 @@ import {
   parseStructuredObservation,
 } from './schema';
 
-const DEFAULT_OBSERVATION_MODEL = 'gpt-5-mini';
+const DEFAULT_OBSERVATION_MODEL = 'gemini-2.5-flash-lite';
 
-type ResponsesApiSuccess = {
-  output_text?: string;
-  output?: Array<{
-    type?: string;
-    text?: string;
-    content?: Array<{
-      type?: string;
-      text?: string;
-    }>;
+type GeminiResponse = {
+  candidates?: Array<{
+    content?: {
+      parts?: Array<{text?: string}>;
+    };
+    finishReason?: string;
   }>;
   error?: {
     message?: string;
+    code?: number;
+    status?: string;
   };
 };
 
-function extractOutputText(response: ResponsesApiSuccess): string | null {
-  if (typeof response.output_text === 'string' && response.output_text.length > 0) {
-    return response.output_text;
+function extractOutputText(response: GeminiResponse): string | null {
+  const candidates = response.candidates;
+
+  if (!Array.isArray(candidates) || candidates.length === 0) {
+    return null;
   }
 
-  const output = Array.isArray(response.output) ? response.output : [];
+  const parts = candidates[0]?.content?.parts;
 
-  for (const item of output) {
-    if (typeof item?.text === 'string' && item.text.length > 0) {
-      return item.text;
-    }
+  if (!Array.isArray(parts)) {
+    return null;
+  }
 
-    if (!Array.isArray(item?.content)) {
-      continue;
-    }
-
-    for (const contentItem of item.content) {
-      if (
-        contentItem?.type === 'output_text' &&
-        typeof contentItem.text === 'string' &&
-        contentItem.text.length > 0
-      ) {
-        return contentItem.text;
-      }
+  for (const part of parts) {
+    if (typeof part?.text === 'string' && part.text.length > 0) {
+      return part.text;
     }
   }
 
   return null;
 }
+
+function stripStringLengthConstraints(
+  schema: Record<string, unknown>,
+): Record<string, unknown> {
+  const result: Record<string, unknown> = {};
+
+  for (const [key, value] of Object.entries(schema)) {
+    if (key === 'minLength' || key === 'maxLength') {
+      continue;
+    }
+
+    if (value != null && typeof value === 'object' && !Array.isArray(value)) {
+      result[key] = stripStringLengthConstraints(
+        value as Record<string, unknown>,
+      );
+    } else if (Array.isArray(value)) {
+      result[key] = value.map(item =>
+        item != null && typeof item === 'object' && !Array.isArray(item)
+          ? stripStringLengthConstraints(item as Record<string, unknown>)
+          : item,
+      );
+    } else {
+      result[key] = value;
+    }
+  }
+
+  return result;
+}
+
+const GEMINI_OBSERVATION_SCHEMA = stripStringLengthConstraints(
+  STRUCTURED_OBSERVATION_JSON_SCHEMA as unknown as Record<string, unknown>,
+);
 
 function buildObservationPrompt(input: ObservationEngineInput): string {
   const recentObservationSummaries = input.recentObservations
@@ -84,7 +107,7 @@ function buildObservationPrompt(input: ObservationEngineInput): string {
     recentObservations: recentObservationSummaries,
   };
 
-  return [
+  const lines = [
     'You are observing a desktop screenshot for task-tracking.',
     'Return only strict JSON that matches the provided schema.',
     'Base your answer only on visible evidence and supplied metadata.',
@@ -94,10 +117,16 @@ function buildObservationPrompt(input: ObservationEngineInput): string {
     '',
     'Metadata:',
     JSON.stringify(metadata, null, 2),
-  ].join('\n');
+  ];
+
+  if (input.ocrText != null && input.ocrText.length > 0) {
+    lines.push('', 'OCR text extracted from the screenshot:', input.ocrText);
+  }
+
+  return lines.join('\n');
 }
 
-export async function generateObservationWithOpenAI(
+export async function generateObservation(
   apiKey: string,
   input: ObservationEngineInput,
   model = DEFAULT_OBSERVATION_MODEL,
@@ -105,47 +134,44 @@ export async function generateObservationWithOpenAI(
   const trimmedApiKey = apiKey.trim();
 
   if (trimmedApiKey.length === 0) {
-    throw new Error('An OpenAI API key is required before running observations.');
+    throw new Error(
+      'A Google AI API key is required before running observations.',
+    );
   }
 
   const startedAt = Date.now();
-  const response = await fetch('https://api.openai.com/v1/responses', {
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`;
+  const response = await fetch(url, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
-      Authorization: `Bearer ${trimmedApiKey}`,
+      'x-goog-api-key': trimmedApiKey,
     },
     body: JSON.stringify({
-      model,
-      store: false,
-      max_output_tokens: 500,
-      input: [
+      contents: [
         {
-          role: 'user',
-          content: [
+          parts: [
             {
-              type: 'input_text',
               text: buildObservationPrompt(input),
             },
             {
-              type: 'input_image',
-              image_url: `data:${input.imageMimeType};base64,${input.imageBase64}`,
+              inline_data: {
+                mime_type: input.imageMimeType,
+                data: input.imageBase64,
+              },
             },
           ],
         },
       ],
-      text: {
-        format: {
-          type: 'json_schema',
-          name: 'desktop_observation',
-          strict: true,
-          schema: STRUCTURED_OBSERVATION_JSON_SCHEMA,
-        },
+      generationConfig: {
+        response_mime_type: 'application/json',
+        response_schema: GEMINI_OBSERVATION_SCHEMA,
+        max_output_tokens: 4096,
       },
     }),
   });
 
-  const payload = (await response.json()) as ResponsesApiSuccess;
+  const payload = (await response.json()) as GeminiResponse;
 
   if (!response.ok) {
     throw new Error(
@@ -154,10 +180,17 @@ export async function generateObservationWithOpenAI(
     );
   }
 
+  const finishReason = payload.candidates?.[0]?.finishReason;
   const outputText = extractOutputText(payload);
 
   if (outputText == null) {
-    throw new Error('The observation response did not include any JSON text.');
+    throw new Error(
+      finishReason === 'MAX_TOKENS'
+        ? 'The model hit the token limit before producing complete output. Try a higher max_output_tokens.'
+        : finishReason === 'SAFETY'
+          ? 'The model refused to generate output due to safety filters.'
+          : `The observation response did not include any JSON text (finishReason: ${finishReason ?? 'unknown'}).`,
+    );
   }
 
   return {
