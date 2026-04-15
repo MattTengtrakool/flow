@@ -63,4 +63,108 @@ describe('replayEventLog', () => {
       '2026-04-12T15:08:00.000Z',
     );
   });
+
+  test('projects task segments, lineages, and decisions without rerunning engine logic', () => {
+    const eventLog: DomainEvent[] = [
+      {
+        id: 'event_session',
+        type: 'session_started',
+        sessionId: 'session_1',
+        title: 'Morning Session',
+        occurredAt: '2026-04-12T15:00:00.000Z',
+      },
+      {
+        id: 'event_observation',
+        type: 'observation_added',
+        observationId: 'observation_1',
+        sessionId: 'session_1',
+        text: 'Fixing payment retry logic.',
+        structured: {
+          summary: 'Fixing payment retry logic in the payments-service repo.',
+          activityType: 'coding',
+          taskHypothesis: 'Fix PAY-193 retry flow',
+          confidence: 0.87,
+          sensitivity: 'low',
+          sensitivityReason: 'Only source code is visible.',
+          artifacts: ['retry.ts'],
+          entities: {
+            apps: ['Cursor'],
+            documents: ['retry.ts'],
+            tickets: ['PAY-193'],
+            repos: ['payments-service'],
+            urls: [],
+            people: [],
+          },
+          nextAction: 'Update retry logic.',
+        },
+        occurredAt: '2026-04-12T15:01:00.000Z',
+      },
+      {
+        id: 'event_segment',
+        type: 'task_segment_started',
+        occurredAt: '2026-04-12T15:01:00.000Z',
+        segment: {
+          id: 'segment_1',
+          lineageId: 'lineage_1',
+          sessionId: 'session_1',
+          state: 'open',
+          kind: 'primary',
+          startTime: '2026-04-12T15:01:00.000Z',
+          endTime: null,
+          lastActiveTime: '2026-04-12T15:01:00.000Z',
+          liveTitle: 'Fix PAY-193 retry flow',
+          liveSummary: 'Working on retry logic.',
+          finalTitle: null,
+          finalSummary: null,
+          observationIds: [],
+          supportingApps: ['Cursor'],
+          entityMemory: {
+            apps: ['Cursor'],
+            repos: ['payments-service'],
+            ticketIds: ['PAY-193'],
+            projects: [],
+            documents: ['retry.ts'],
+            people: [],
+            urls: [],
+          },
+          interruptionSegments: [],
+          confidence: 0.87,
+          provisional: true,
+          reviewStatus: 'unreviewed',
+        },
+      },
+      {
+        id: 'event_decision',
+        type: 'task_decision_recorded',
+        occurredAt: '2026-04-12T15:01:00.000Z',
+        decisionId: 'decision_1',
+        decision: {
+          id: 'decision_1',
+          observationId: 'observation_1',
+          decision: 'start_new',
+          targetSegmentId: 'segment_1',
+          targetLineageId: 'lineage_1',
+          decisionMode: 'deterministic',
+          reasonCodes: ['no_active_segment'],
+          reasonText: 'Started a new segment.',
+          confidence: 1,
+          usedLlm: false,
+          candidateShortlist: [],
+          featureSnapshot: null,
+          stale: false,
+          errorReason: null,
+        },
+      },
+    ];
+
+    const timeline = replayEventLog(eventLog);
+
+    expect(timeline.currentTaskSegmentId).toBe('segment_1');
+    expect(timeline.currentTaskLineageId).toBe('lineage_1');
+    expect(timeline.taskSegmentsById.segment_1.observationIds).toEqual([
+      'observation_1',
+    ]);
+    expect(timeline.taskDecisionByObservationId.observation_1).toBe('decision_1');
+    expect(timeline.taskLineagesById.lineage_1.segmentIds).toEqual(['segment_1']);
+  });
 });

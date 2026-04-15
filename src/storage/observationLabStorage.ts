@@ -3,6 +3,7 @@ import {NativeModules} from 'react-native';
 import type {
   ObservationFixtureRecord,
   ObservationSettings,
+  WorkflowRecordingRecord,
 } from '../observation/types';
 
 type LoadSettingsPayload = {
@@ -12,6 +13,11 @@ type LoadSettingsPayload = {
 
 type LoadFixturesPayload = {
   fixtures: ObservationFixtureRecord[];
+  directoryPath: string;
+};
+
+type LoadWorkflowRecordingsPayload = {
+  recordings: WorkflowRecordingRecord[];
   directoryPath: string;
 };
 
@@ -27,6 +33,13 @@ type ObservationLabStorageModule = {
   deleteObservationFixture: (
     fixtureId: string,
   ) => Promise<{directoryPath: string; deletedAt: string}>;
+  loadWorkflowRecordings: () => Promise<LoadWorkflowRecordingsPayload>;
+  saveWorkflowRecording: (
+    recording: WorkflowRecordingRecord,
+  ) => Promise<{filePath: string; savedAt: string}>;
+  deleteWorkflowRecording: (
+    recordingId: string,
+  ) => Promise<{directoryPath: string; deletedAt: string}>;
 };
 
 const nativeModule = NativeModules.ObservationLabStorage as
@@ -40,6 +53,7 @@ const inMemoryState = {
     savedAt: null,
   } as ObservationSettings,
   fixtures: [] as ObservationFixtureRecord[],
+  workflowRecordings: [] as WorkflowRecordingRecord[],
 };
 
 export async function loadObservationSettings(): Promise<LoadSettingsPayload> {
@@ -116,6 +130,58 @@ export async function deleteObservationFixture(
 
   return {
     directoryPath: 'in-memory://observation-fixtures',
+    deletedAt: new Date().toISOString(),
+  };
+}
+
+export async function loadWorkflowRecordings(): Promise<LoadWorkflowRecordingsPayload> {
+  if (nativeModule?.loadWorkflowRecordings != null) {
+    return nativeModule.loadWorkflowRecordings();
+  }
+
+  return {
+    recordings: inMemoryState.workflowRecordings,
+    directoryPath: 'in-memory://workflow-recordings',
+  };
+}
+
+export async function saveWorkflowRecording(
+  recording: WorkflowRecordingRecord,
+): Promise<{filePath: string; savedAt: string}> {
+  if (nativeModule?.saveWorkflowRecording != null) {
+    return nativeModule.saveWorkflowRecording(recording);
+  }
+
+  const nextRecordings = [...inMemoryState.workflowRecordings];
+  const existingIndex = nextRecordings.findIndex(item => item.id === recording.id);
+
+  if (existingIndex >= 0) {
+    nextRecordings[existingIndex] = recording;
+  } else {
+    nextRecordings.push(recording);
+  }
+
+  inMemoryState.workflowRecordings = nextRecordings;
+
+  return {
+    filePath: `in-memory://workflow-recordings/${recording.id}.json`,
+    savedAt: new Date().toISOString(),
+  };
+}
+
+export async function deleteWorkflowRecording(
+  recordingId: string,
+): Promise<{directoryPath: string; deletedAt: string}> {
+  if (nativeModule?.deleteWorkflowRecording != null) {
+    return nativeModule.deleteWorkflowRecording(recordingId);
+  }
+
+  inMemoryState.workflowRecordings = inMemoryState.workflowRecordings.filter(
+    recording => recording.id !== recordingId,
+  );
+
+  return {
+    directoryPath: 'in-memory://workflow-recordings',
     deletedAt: new Date().toISOString(),
   };
 }

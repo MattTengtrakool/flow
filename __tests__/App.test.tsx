@@ -27,4 +27,7 @@ test('renders the observation lab shell', async () => {
   expect(
     renderer.root.findByProps({testID: 'save-fixture-button'}),
   ).toBeTruthy();
+  expect(
+    renderer.root.findByProps({testID: 'start-manual-workflow-button'}),
+  ).toBeTruthy();
 });

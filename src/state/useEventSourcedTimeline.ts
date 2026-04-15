@@ -27,11 +27,50 @@ import {
   createDomainId,
   createOccurredAt,
   EMPTY_TIMELINE,
+  getCurrentContext,
+  getVisibleObservations,
   replayEventLog,
+  type ObservationAddedEvent,
   type DomainEvent,
   type TimelineView,
 } from './eventLog';
-import type {ObservationRun} from '../observation/types';
+import type {ObservationRun, StructuredObservation} from '../observation/types';
+import {computeTaskEngineMetrics} from '../tasks/metrics';
+import {buildReconciliationEvents} from '../tasks/reconcile';
+import {runTaskEngineForObservation, type TaskEngineRunResult} from '../tasks/runTaskEngineForObservation';
+import {
+  getCurrentPrimaryTaskSegment,
+  getCurrentSideBranchSegment,
+  getCurrentTaskLineage,
+  getLastTaskDecisionAt,
+  getPendingObservations,
+  getRecentTaskObservations,
+  getRecentTaskDecisions,
+  getTaskDecisionCount,
+  getTaskLineages,
+  getTaskSegments,
+} from '../tasks/selectors';
+import {
+  TASK_ENGINE_VERSION,
+  type UserTaskCorrection,
+} from '../tasks/types';
+import {
+  generateStructuredObservationForCapture,
+  type ObservationCapturePreview,
+} from '../observation/runObservationForCapture';
+import {
+  sanitizeCaptureMetadata,
+  sanitizeContextSnapshot,
+  sanitizeInspection,
+  sanitizeObservationRun,
+  sanitizeObservationSummary,
+  sanitizeStructuredObservation,
+} from '../privacy/redaction';
+import {
+  coalesceQueuedContinuousObservation,
+  evaluateContinuousCaptureDecision,
+  shouldAutoPauseContinuousMode,
+} from './continuousSessionUtils';
 
 const OBSERVATION_TEMPLATES = [
   'Reviewed a pull request and scanned the latest comments.',
@@ -82,6 +121,7 @@ type TimelineAction =
   | {type: 'hydrate_succeeded'; eventLog: DomainEvent[]; storagePath: string}
   | {type: 'hydrate_failed'; errorMessage: string}
   | {type: 'append_event'; event: DomainEvent}
+  | {type: 'append_events'; events: DomainEvent[]}
   | {type: 'rebuild_timeline'; rebuiltAt: string}
   | {type: 'persist_succeeded'; storagePath: string; savedAt: string}
   | {type: 'persist_failed'; errorMessage: string};
@@ -111,6 +151,49 @@ type SchedulerState = {
   lastFrameHash: string | null;
 };
 
+type ContinuousObservationDecision =
+  | 'observed'
+  | 'skipped_duplicate'
+  | 'skipped_busy'
+  | 'error'
+  | null;
+
+type ContinuousModePhase = 'off' | 'capturing' | 'observing' | 'paused' | 'error';
+
+type ContinuousModeState = {
+  enabled: boolean;
+  autoObserveEnabled: boolean;
+  observationQueueLength: number;
+  observationInFlight: boolean;
+  lastObservedAt: string | null;
+  lastObservedFrameHash: string | null;
+  lastObservationDecision: ContinuousObservationDecision;
+  currentMode: ContinuousModePhase;
+  continuousStatusMessage: string;
+  consecutiveFailureCount: number;
+};
+
+type QueuedContinuousObservation = {
+  preview: ObservationCapturePreview;
+  inspection: CaptureInspectionPayload;
+  observedAt: string;
+  frameHash: string | null;
+};
+
+export type StructuredObservationRecordedPayload = {
+  observationId: string;
+  observationRun: ObservationRun;
+  preview: ObservationCapturePreview;
+  inspection: CaptureInspectionPayload;
+  taskEngineResult: TaskEngineRunResult | null;
+};
+
+type UseEventSourcedTimelineOptions = {
+  onStructuredObservationRecorded?: (
+    payload: StructuredObservationRecordedPayload,
+  ) => void;
+};
+
 const INITIAL_STORE: TimelineStore = {
   eventLog: [],
   timeline: EMPTY_TIMELINE,
@@ -131,6 +214,19 @@ const INITIAL_SCHEDULER_STATE: SchedulerState = {
   lastTickAt: null,
   lastDecision: null,
   lastFrameHash: null,
+};
+
+const INITIAL_CONTINUOUS_MODE_STATE: ContinuousModeState = {
+  enabled: false,
+  autoObserveEnabled: false,
+  observationQueueLength: 0,
+  observationInFlight: false,
+  lastObservedAt: null,
+  lastObservedFrameHash: null,
+  lastObservationDecision: null,
+  currentMode: 'off',
+  continuousStatusMessage: 'Continuous mode is off.',
+  consecutiveFailureCount: 0,
 };
 
 function timelineReducer(
@@ -166,6 +262,17 @@ function timelineReducer(
       };
     }
 
+    case 'append_events': {
+      const nextEventLog = [...state.eventLog, ...action.events];
+
+      return {
+        ...state,
+        eventLog: nextEventLog,
+        timeline: replayEventLog(nextEventLog),
+        errorMessage: null,
+      };
+    }
+
     case 'rebuild_timeline':
       return {
         ...state,
@@ -192,20 +299,6 @@ function timelineReducer(
 function createFakeObservationText(count: number): string {
   const template = OBSERVATION_TEMPLATES[count % OBSERVATION_TEMPLATES.length];
   return `Observation ${count + 1}: ${template}`;
-}
-
-function createScheduledObservationText(snapshot: ContextSnapshotPayload): string {
-  const appLabel = snapshot.appName ?? 'Unknown app';
-  const windowLabel =
-    snapshot.windowTitle != null && snapshot.windowTitle.length > 0
-      ? `: ${snapshot.windowTitle}`
-      : '';
-
-  if (snapshot.isIdle) {
-    return `1 FPS scheduler saw a visual change while the machine was idle in ${appLabel}${windowLabel}.`;
-  }
-
-  return `1 FPS scheduler saw a visual change in ${appLabel}${windowLabel}.`;
 }
 
 function toPermissionsFromSnapshot(
@@ -278,7 +371,19 @@ function createActionFeedback(
   };
 }
 
-export function useEventSourcedTimeline() {
+function getRecentStructuredObservationsForTimeline(
+  timeline: TimelineView,
+  count = 5,
+): StructuredObservation[] {
+  return getVisibleObservations(timeline)
+    .filter(observation => observation.structured != null)
+    .slice(-count)
+    .map(observation => observation.structured!);
+}
+
+export function useEventSourcedTimeline(
+  options: UseEventSourcedTimelineOptions = {},
+) {
   const [store, dispatch] = useReducer(timelineReducer, INITIAL_STORE);
   const [monitoringEnabled, setMonitoringEnabled] = useState(false);
   const [permissions, setPermissions] = useState<PermissionsStatus>(
@@ -295,12 +400,31 @@ export function useEventSourcedTimeline() {
   const [schedulerState, setSchedulerState] = useState<SchedulerState>(
     INITIAL_SCHEDULER_STATE,
   );
+  const [continuousModeState, setContinuousModeState] = useState<ContinuousModeState>(
+    INITIAL_CONTINUOUS_MODE_STATE,
+  );
+  const eventLogRef = useRef<DomainEvent[]>(INITIAL_STORE.eventLog);
+  const timelineRef = useRef<TimelineView>(INITIAL_STORE.timeline);
+  const taskEngineQueueRef = useRef(Promise.resolve());
   const lastPreviewDataUriRef = useRef<string | null>(null);
   const lastScheduledFrameHashRef = useRef<string | null>(null);
   const lastScheduledPerceptualHashRef = useRef<string | null>(null);
   const schedulerBusyRef = useRef(false);
+  const continuousModeEnabledRef = useRef(false);
+  const continuousObservationBusyRef = useRef(false);
+  const continuousFailureCountRef = useRef(0);
+  const queuedContinuousObservationRef =
+    useRef<QueuedContinuousObservation | null>(null);
+  const reconcileAfterContinuousRunRef = useRef(false);
+  const emitStructuredObservationRecorded = useStableEvent(
+    (payload: StructuredObservationRecordedPayload) => {
+      options.onStructuredObservationRecorded?.(payload);
+    },
+  );
 
   const appendEvent = useStableEvent((event: DomainEvent) => {
+    eventLogRef.current = [...eventLogRef.current, event];
+    timelineRef.current = replayEventLog(eventLogRef.current);
     startTransition(() => {
       dispatch({
         type: 'append_event',
@@ -308,6 +432,36 @@ export function useEventSourcedTimeline() {
       });
     });
   });
+
+  const appendEvents = useStableEvent((events: DomainEvent[]) => {
+    if (events.length === 0) {
+      return;
+    }
+
+    eventLogRef.current = [...eventLogRef.current, ...events];
+    timelineRef.current = replayEventLog(eventLogRef.current);
+    startTransition(() => {
+      dispatch({
+        type: 'append_events',
+        events,
+      });
+    });
+  });
+
+  useEffect(() => {
+    eventLogRef.current = store.eventLog;
+    timelineRef.current = store.timeline;
+  }, [store.eventLog, store.timeline]);
+
+  useEffect(() => {
+    continuousModeEnabledRef.current =
+      continuousModeState.enabled && continuousModeState.autoObserveEnabled;
+    continuousFailureCountRef.current = continuousModeState.consecutiveFailureCount;
+  }, [
+    continuousModeState.autoObserveEnabled,
+    continuousModeState.consecutiveFailureCount,
+    continuousModeState.enabled,
+  ]);
 
   const handleContextSnapshot = useStableEvent(
     (snapshot: ContextSnapshotPayload) => {
@@ -320,7 +474,7 @@ export function useEventSourcedTimeline() {
         id: createDomainId('event'),
         type: 'context_snapshot_recorded',
         snapshotId: createDomainId('context'),
-        snapshot,
+        snapshot: sanitizeContextSnapshot(snapshot)!,
         occurredAt: snapshot.recordedAt,
       });
     },
@@ -498,6 +652,265 @@ export function useEventSourcedTimeline() {
     };
   }, [store.hydrationStatus]);
 
+  const enqueueTaskEngineForObservation = useStableEvent(
+    (
+      observationId: string,
+      onComplete?: (result: TaskEngineRunResult | null) => void,
+    ) => {
+      taskEngineQueueRef.current = taskEngineQueueRef.current
+        .catch(() => {})
+        .then(async () => {
+          const timeline = timelineRef.current;
+          const observation = timeline.observationsById[observationId];
+
+          if (observation == null || observation.deletedAt != null) {
+            onComplete?.(null);
+            return;
+          }
+
+          const result = await runTaskEngineForObservation({
+            timeline,
+            observation,
+            getLatestTimeline: () => timelineRef.current,
+          });
+
+          if (result != null && result.events.length > 0) {
+            appendEvents(result.events);
+          }
+
+          onComplete?.(result);
+        });
+    },
+  );
+
+  const appendObservationAndRunTaskEngine = useStableEvent(
+    (
+      event: ObservationAddedEvent,
+      onComplete?: (result: TaskEngineRunResult | null) => void,
+    ) => {
+      appendEvent(event);
+      enqueueTaskEngineForObservation(event.observationId, onComplete);
+    },
+  );
+
+  const stopContinuousMode = useStableEvent((reason?: string) => {
+    queuedContinuousObservationRef.current = null;
+    reconcileAfterContinuousRunRef.current = false;
+    startTransition(() => {
+      setContinuousModeState(previousState => ({
+        ...previousState,
+        enabled: false,
+        autoObserveEnabled: false,
+        observationQueueLength: 0,
+        observationInFlight: false,
+        currentMode: 'off',
+        continuousStatusMessage: reason ?? 'Continuous mode is off.',
+      }));
+      setSchedulerState(previousState => ({
+        ...previousState,
+        running: false,
+        busy: false,
+      }));
+    });
+  });
+
+  const pauseContinuousMode = useStableEvent((message: string) => {
+    queuedContinuousObservationRef.current = null;
+    startTransition(() => {
+      setContinuousModeState(previousState => ({
+        ...previousState,
+        observationQueueLength: 0,
+        observationInFlight: false,
+        currentMode: 'paused',
+        continuousStatusMessage: message,
+      }));
+      setSchedulerState(previousState => ({
+        ...previousState,
+        running: false,
+        busy: false,
+      }));
+    });
+  });
+
+  const processContinuousObservation = useStableEvent(
+    async (queuedObservation: QueuedContinuousObservation) => {
+      if (!continuousModeEnabledRef.current) {
+        return;
+      }
+
+      continuousObservationBusyRef.current = true;
+      startTransition(() => {
+        setContinuousModeState(previousState => ({
+          ...previousState,
+          observationInFlight: true,
+          observationQueueLength:
+            queuedContinuousObservationRef.current != null ? 1 : 0,
+          currentMode: 'observing',
+          continuousStatusMessage: 'Generating a structured observation for the latest changed capture.',
+        }));
+      });
+
+      try {
+        const timeline = timelineRef.current;
+        const run = await generateStructuredObservationForCapture({
+          preview: queuedObservation.preview,
+          inspection: queuedObservation.inspection,
+          currentContext: getCurrentContext(timeline),
+          recentObservations: getRecentStructuredObservationsForTimeline(timeline),
+        });
+
+        recordStructuredObservation(
+          run,
+          queuedObservation.observedAt,
+          queuedObservation.preview.dataUri ?? null,
+          {
+            preview: queuedObservation.preview,
+            inspection: queuedObservation.inspection,
+          },
+        );
+        startTransition(() => {
+          setContinuousModeState(previousState => ({
+            ...previousState,
+            observationInFlight: false,
+            observationQueueLength:
+              queuedContinuousObservationRef.current != null ? 1 : 0,
+            lastObservedAt: queuedObservation.observedAt,
+            lastObservedFrameHash: queuedObservation.frameHash,
+            lastObservationDecision: 'observed',
+            currentMode: continuousModeEnabledRef.current ? 'capturing' : 'off',
+            continuousStatusMessage: `Observed latest changed capture at ${new Date(
+              queuedObservation.observedAt,
+            ).toLocaleTimeString()}.`,
+            consecutiveFailureCount: 0,
+          }));
+        });
+      } catch (error) {
+        const nextFailureCount = continuousFailureCountRef.current + 1;
+        const message =
+          error instanceof Error
+            ? error.message
+            : 'Continuous observation failed.';
+
+        startTransition(() => {
+          setContinuousModeState(previousState => ({
+            ...previousState,
+            observationInFlight: false,
+            observationQueueLength:
+              queuedContinuousObservationRef.current != null ? 1 : 0,
+            lastObservationDecision: 'error',
+            currentMode: shouldAutoPauseContinuousMode(nextFailureCount)
+              ? 'paused'
+              : 'error',
+            continuousStatusMessage:
+              shouldAutoPauseContinuousMode(nextFailureCount)
+                ? `Continuous mode auto-paused after repeated observation failures: ${message}`
+                : `Continuous observation failed: ${message}`,
+            consecutiveFailureCount: previousState.consecutiveFailureCount + 1,
+          }));
+        });
+
+        if (shouldAutoPauseContinuousMode(nextFailureCount)) {
+          pauseContinuousMode(
+            `Continuous mode auto-paused after repeated observation failures: ${message}`,
+          );
+        }
+      } finally {
+        continuousObservationBusyRef.current = false;
+
+        if (!continuousModeEnabledRef.current) {
+          if (reconcileAfterContinuousRunRef.current) {
+            reconcileAfterContinuousRunRef.current = false;
+            runTaskReconciliation();
+          }
+          return;
+        }
+
+        const nextQueuedObservation = queuedContinuousObservationRef.current;
+        queuedContinuousObservationRef.current = null;
+
+        if (nextQueuedObservation != null) {
+          await processContinuousObservation(nextQueuedObservation);
+        }
+      }
+    },
+  );
+
+  const enqueueContinuousObservation = useStableEvent(
+    (queuedObservation: QueuedContinuousObservation) => {
+      if (!continuousModeEnabledRef.current) {
+        return;
+      }
+
+      if (continuousObservationBusyRef.current) {
+        queuedContinuousObservationRef.current = coalesceQueuedContinuousObservation(
+          queuedContinuousObservationRef.current,
+          queuedObservation,
+        );
+        startTransition(() => {
+          setContinuousModeState(previousState => ({
+            ...previousState,
+            observationQueueLength: 1,
+            lastObservationDecision: 'skipped_busy',
+            continuousStatusMessage:
+              'Observation already in flight; keeping only the latest changed capture in the queue.',
+          }));
+        });
+        return;
+      }
+
+      processContinuousObservation(queuedObservation).catch(() => {});
+    },
+  );
+
+  function startContinuousMode() {
+    lastScheduledFrameHashRef.current = null;
+    lastScheduledPerceptualHashRef.current = null;
+    queuedContinuousObservationRef.current = null;
+    reconcileAfterContinuousRunRef.current = false;
+    startTransition(() => {
+      setContinuousModeState(previousState => ({
+        ...previousState,
+        enabled: true,
+        autoObserveEnabled: true,
+        observationQueueLength: 0,
+        observationInFlight: false,
+        currentMode: 'capturing',
+        continuousStatusMessage:
+          store.timeline.currentSessionId != null
+            ? 'Continuous mode is running for the active session.'
+            : 'Continuous mode is running without an active session.',
+        consecutiveFailureCount: 0,
+      }));
+      setSchedulerState(previousState => ({
+        ...previousState,
+        running: true,
+        busy: false,
+        tickCount: 0,
+        changedCount: 0,
+        skippedCount: 0,
+        lastTickAt: null,
+        lastDecision: null,
+        lastFrameHash: null,
+      }));
+    });
+  }
+
+  function runTaskReconciliation() {
+    const reconciliationEvents = buildReconciliationEvents(timelineRef.current);
+    appendEvents(reconciliationEvents);
+  }
+
+  function applyUserTaskCorrection(correction: UserTaskCorrection) {
+    appendEvent({
+      id: createDomainId('event'),
+      occurredAt: createOccurredAt(),
+      type: 'user_task_edit_applied',
+      correction,
+      actor: 'user',
+      engineVersion: TASK_ENGINE_VERSION,
+    });
+  }
+
   function startSession() {
     const sessionNumber = store.timeline.sessionOrder.length + 1;
     const sessionId = createDomainId('session');
@@ -509,6 +922,7 @@ export function useEventSourcedTimeline() {
       title: `Session ${sessionNumber}`,
       occurredAt: createOccurredAt(),
     });
+    startContinuousMode();
   }
 
   function stopSession() {
@@ -522,6 +936,12 @@ export function useEventSourcedTimeline() {
       sessionId: store.timeline.currentSessionId,
       occurredAt: createOccurredAt(),
     });
+    if (continuousModeEnabledRef.current || continuousObservationBusyRef.current) {
+      reconcileAfterContinuousRunRef.current = true;
+      stopContinuousMode('Continuous mode stopped with the session.');
+    } else {
+      runTaskReconciliation();
+    }
   }
 
   function renameCurrentSession(title: string) {
@@ -588,7 +1008,7 @@ export function useEventSourcedTimeline() {
       observation => observation.deletedAt == null,
     ).length;
 
-    appendEvent({
+    appendObservationAndRunTaskEngine({
       id: createDomainId('event'),
       type: 'observation_added',
       observationId: createDomainId('observation'),
@@ -620,18 +1040,42 @@ export function useEventSourcedTimeline() {
   function recordStructuredObservation(
     observationRun: ObservationRun,
     occurredAt = createOccurredAt(),
-  ) {
-    appendEvent({
+    capturePreviewDataUri: string | null = null,
+    source?: {
+      preview: ObservationCapturePreview;
+      inspection: CaptureInspectionPayload;
+    },
+  ): string {
+    const observationId = createDomainId('observation');
+    const sanitizedObservationRun = sanitizeObservationRun(observationRun);
+    const event: ObservationAddedEvent = {
       id: createDomainId('event'),
       type: 'observation_added',
-      observationId: createDomainId('observation'),
+      observationId,
       sessionId: store.timeline.currentSessionId ?? undefined,
       taskId: store.timeline.currentTaskId ?? undefined,
-      text: observationRun.observation.summary,
-      structured: observationRun.observation,
-      engineRun: observationRun,
+      text: sanitizeObservationSummary(observationRun.observation.summary),
+      structured: sanitizeStructuredObservation(observationRun.observation),
+      engineRun: sanitizedObservationRun,
+      capturePreviewDataUri: null,
       occurredAt,
+    };
+
+    appendObservationAndRunTaskEngine(event, taskEngineResult => {
+      if (source == null) {
+        return;
+      }
+
+      emitStructuredObservationRecorded({
+        observationId,
+        observationRun,
+        preview: source.preview,
+        inspection: source.inspection,
+        taskEngineResult,
+      });
     });
+
+    return observationId;
   }
 
   async function promptForAccessibility() {
@@ -723,7 +1167,7 @@ export function useEventSourcedTimeline() {
         id: createDomainId('event'),
         type: 'capture_target_resolved',
         inspectionId: createDomainId('inspection'),
-        inspection,
+        inspection: sanitizeInspection(inspection),
         occurredAt: inspection.inspectedAt,
       });
     } catch (error) {
@@ -739,7 +1183,10 @@ export function useEventSourcedTimeline() {
     }
   }
 
-  async function runCaptureNow() {
+  async function runCaptureNow(): Promise<{
+    preview: CapturePreviewState;
+    inspection: CaptureInspectionPayload;
+  } | null> {
     try {
       const result = await captureNow();
       const previewDataUri =
@@ -784,7 +1231,7 @@ export function useEventSourcedTimeline() {
         id: createDomainId('event'),
         type: 'capture_target_resolved',
         inspectionId: createDomainId('inspection'),
-        inspection: result.inspection,
+        inspection: sanitizeInspection(result.inspection),
         occurredAt: result.inspection.inspectedAt,
       });
 
@@ -792,9 +1239,19 @@ export function useEventSourcedTimeline() {
         id: createDomainId('event'),
         type: 'capture_performed',
         captureId: createDomainId('capture'),
-        capture: captureMetadata,
+        capture: sanitizeCaptureMetadata(captureMetadata),
         occurredAt: captureMetadata.capturedAt,
       });
+
+      return {
+        preview: {
+          dataUri: previewDataUri,
+          mimeType: result.previewMimeType,
+          metadata: captureMetadata,
+          ocrText: result.ocrText,
+        },
+        inspection: result.inspection,
+      };
     } catch (error) {
       const message =
         error instanceof Error ? error.message : 'Failed to capture a screenshot.';
@@ -803,6 +1260,8 @@ export function useEventSourcedTimeline() {
         setNativeErrorMessage(message);
         setActionFeedback(createActionFeedback(message, 'error'));
       });
+
+      return null;
     }
   }
 
@@ -848,16 +1307,51 @@ export function useEventSourcedTimeline() {
       if (didChange) {
         lastScheduledFrameHashRef.current = frameHash;
         lastScheduledPerceptualHashRef.current = perceptualHash;
+        if (continuousModeEnabledRef.current && captureMetadata.status === 'captured') {
+          const continuousDecision = evaluateContinuousCaptureDecision({
+            captureStatus: captureMetadata.status,
+            didChange,
+            frameHash,
+            lastObservedFrameHash: continuousModeState.lastObservedFrameHash,
+            observationInFlight: continuousObservationBusyRef.current,
+          });
 
-        appendEvent({
-          id: createDomainId('event'),
-          type: 'observation_added',
-          observationId: createDomainId('observation'),
-          sessionId: store.timeline.currentSessionId ?? undefined,
-          taskId: store.timeline.currentTaskId ?? undefined,
-          text: createScheduledObservationText(result.inspection.context),
-          occurredAt: captureMetadata.capturedAt,
-        });
+          if (continuousDecision === 'skip_duplicate' || isPerceptuallySimilar) {
+            startTransition(() => {
+              setContinuousModeState(previousState => ({
+                ...previousState,
+                lastObservationDecision: 'skipped_duplicate',
+                currentMode: 'capturing',
+                continuousStatusMessage:
+                  'Changed capture skipped because it matched a recently observed frame.',
+              }));
+            });
+          } else if (continuousDecision === 'skip_busy') {
+            enqueueContinuousObservation({
+              preview: {
+                dataUri: previewDataUri,
+                mimeType: result.previewMimeType,
+                metadata: captureMetadata,
+                ocrText: result.ocrText,
+              },
+              inspection: result.inspection,
+              observedAt: captureMetadata.capturedAt,
+              frameHash,
+            });
+          } else if (continuousDecision === 'observe') {
+            enqueueContinuousObservation({
+              preview: {
+                dataUri: previewDataUri,
+                mimeType: result.previewMimeType,
+                metadata: captureMetadata,
+                ocrText: result.ocrText,
+              },
+              inspection: result.inspection,
+              observedAt: captureMetadata.capturedAt,
+              frameHash,
+            });
+          }
+        }
       }
 
       startTransition(() => {
@@ -905,7 +1399,30 @@ export function useEventSourcedTimeline() {
           lastTickAt: createOccurredAt(),
           lastDecision: 'error',
         }));
+        setContinuousModeState(previousState => {
+          const nextFailureCount = continuousFailureCountRef.current + 1;
+          return {
+            ...previousState,
+            currentMode: shouldAutoPauseContinuousMode(nextFailureCount)
+              ? 'paused'
+              : 'error',
+            continuousStatusMessage:
+              shouldAutoPauseContinuousMode(nextFailureCount)
+                ? `Continuous mode auto-paused after repeated capture failures: ${message}`
+                : `Continuous capture failed: ${message}`,
+            consecutiveFailureCount: nextFailureCount,
+            lastObservationDecision: 'error',
+          };
+        });
       });
+      if (
+        continuousModeEnabledRef.current &&
+        shouldAutoPauseContinuousMode(continuousModeState.consecutiveFailureCount + 1)
+      ) {
+        pauseContinuousMode(
+          `Continuous mode auto-paused after repeated capture failures: ${message}`,
+        );
+      }
     } finally {
       schedulerBusyRef.current = false;
     }
@@ -926,32 +1443,24 @@ export function useEventSourcedTimeline() {
   }, [runScheduledTick, schedulerState.intervalMs, schedulerState.running, store.hydrationStatus]);
 
   function startScheduler() {
-    lastScheduledFrameHashRef.current = null;
-    lastScheduledPerceptualHashRef.current = null;
-    startTransition(() => {
-      setSchedulerState(previousState => ({
-        ...previousState,
-        running: true,
-        busy: false,
-        tickCount: 0,
-        changedCount: 0,
-        skippedCount: 0,
-        lastTickAt: null,
-        lastDecision: null,
-        lastFrameHash: null,
-      }));
-    });
+    startContinuousMode();
   }
 
   function stopScheduler() {
-    startTransition(() => {
-      setSchedulerState(previousState => ({
-        ...previousState,
-        running: false,
-        busy: false,
-      }));
-    });
+    stopContinuousMode();
   }
+
+  const currentPrimaryTaskSegment = getCurrentPrimaryTaskSegment(store.timeline);
+  const currentTaskLineage = getCurrentTaskLineage(store.timeline);
+  const currentSideBranchSegment = getCurrentSideBranchSegment(store.timeline);
+  const recentTaskDecisions = getRecentTaskDecisions(store.timeline, 6);
+  const pendingTaskObservations = getPendingObservations(store.timeline);
+  const taskSegments = getTaskSegments(store.timeline);
+  const taskLineages = getTaskLineages(store.timeline);
+  const recentTaskObservations = getRecentTaskObservations(store.timeline, 6);
+  const taskDecisionCount = getTaskDecisionCount(store.timeline);
+  const lastTaskDecisionAt = getLastTaskDecisionAt(store.timeline);
+  const taskMetrics = computeTaskEngineMetrics(store.timeline);
 
   return {
     ...store,
@@ -961,6 +1470,18 @@ export function useEventSourcedTimeline() {
     latestCapturePreview,
     actionFeedback,
     schedulerState,
+    continuousModeState,
+    currentPrimaryTaskSegment,
+    currentTaskLineage,
+    currentSideBranchSegment,
+    recentTaskDecisions,
+    recentTaskObservations,
+    taskDecisionCount,
+    lastTaskDecisionAt,
+    pendingTaskObservations,
+    taskSegments,
+    taskLineages,
+    taskMetrics,
     surfaceErrorMessage: nativeErrorMessage ?? store.errorMessage,
     startSession,
     stopSession,
@@ -976,6 +1497,10 @@ export function useEventSourcedTimeline() {
     requestScreenCapturePermission,
     runCaptureInspection,
     runCaptureNow,
+    runTaskReconciliation,
+    applyUserTaskCorrection,
+    startContinuousMode,
+    stopContinuousMode,
     startScheduler,
     stopScheduler,
   };

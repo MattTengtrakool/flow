@@ -1,4 +1,4 @@
-import React from 'react';
+import React, {useEffect, useRef, useState} from 'react';
 import {
   Image,
   Pressable,
@@ -10,6 +10,13 @@ import {
 } from 'react-native';
 
 import {useObservationLab} from './src/observation/useObservationLab';
+import type {
+  WorkflowRecordingRecord,
+  WorkflowReplayRecord,
+  WorkflowStepExpectation,
+  WorkflowStepExpectationKind,
+} from './src/observation/types';
+import {TaskDebugger} from './src/tasks/TaskDebugger';
 
 type SectionProps = {
   title: string;
@@ -134,6 +141,84 @@ function averageToLabel(value: number | null): string {
   return value == null ? 'Not scored' : `${value.toFixed(2)} / 5`;
 }
 
+function formatList(values: string[]): string {
+  return values.length === 0 ? 'None' : values.join(', ');
+}
+
+function formatWorkflowMatch(value: boolean | null | undefined): string {
+  if (value == null) {
+    return 'Not labeled';
+  }
+
+  return value ? 'Matched' : 'Mismatched';
+}
+
+type WorkflowStepDraft = Pick<
+  WorkflowStepExpectation,
+  'expectedKind' | 'expectedDecision' | 'note' | 'importance'
+>;
+
+function buildWorkflowComparisonExport(args: {
+  recording: WorkflowRecordingRecord;
+  replay: WorkflowReplayRecord;
+  mismatchesOnly?: boolean;
+}): string {
+  const {recording, replay, mismatchesOnly = false} = args;
+  const lines: string[] = [
+    `workflow_label: ${recording.label}`,
+    `workflow_id: ${recording.id}`,
+    `replayed_at: ${replay.replayedAt}`,
+    `summary: matched=${replay.matchedCount}, mismatched=${replay.mismatchedCount}, unlabeled=${replay.unlabeledCount}`,
+    '',
+    'steps:',
+  ];
+
+  recording.steps.forEach((step, index) => {
+    const replayStep =
+      replay.stepResults.find(result => result.stepId === step.id) ?? null;
+    const isMismatch = replayStep?.matchedExpectation === false;
+
+    if (mismatchesOnly && !isMismatch) {
+      return;
+    }
+
+    lines.push(`- step_index: ${index + 1}`);
+    lines.push(`  step_label: ${step.label}`);
+    lines.push(`  expected_kind: ${step.expectation.expectedKind ?? 'none'}`);
+    lines.push(
+      `  expected_decision: ${step.expectation.expectedDecision ?? 'none'}`,
+    );
+    lines.push(
+      `  expectation_note: ${step.expectation.note.trim() || 'none'}`,
+    );
+    lines.push(
+      `  replay_decision: ${replayStep?.decision ?? 'not_replayed'}`,
+    );
+    lines.push(`  replay_mode: ${replayStep?.decisionMode ?? 'unknown'}`);
+    lines.push(
+      `  match_status: ${
+        replayStep == null
+          ? 'not_replayed'
+          : replayStep.matchedExpectation == null
+            ? 'unlabeled'
+            : replayStep.matchedExpectation
+              ? 'matched'
+              : 'mismatched'
+      }`,
+    );
+    lines.push(
+      `  mismatch_reason: ${replayStep?.mismatchReason ?? 'none'}`,
+    );
+    lines.push('');
+  });
+
+  if (mismatchesOnly && replay.mismatchedCount === 0) {
+    lines.push('- none');
+  }
+
+  return lines.join('\n').trim();
+}
+
 function App() {
   const {
     hydrationStatus,
@@ -164,7 +249,41 @@ function App() {
     setRatingDraft,
     saveSelectedFixtureRating,
     fixtureSummary,
+    workflowRecordings,
+    workflowRecordingsDirectoryPath,
+    selectedWorkflowRecordingId,
+    setSelectedWorkflowRecordingId,
+    selectedWorkflowRecording,
+    activeWorkflowRecording,
+    workflowLabelDraft,
+    setWorkflowLabelDraft,
+    workflowDescriptionDraft,
+    setWorkflowDescriptionDraft,
+    workflowBusy,
+    workflowReplayBusy,
+    startWorkflowRecording,
+    stopWorkflowRecording,
+    recordWorkflowStepNow,
+    saveWorkflowStepExpectation,
+    replaySelectedWorkflowRecording,
+    deleteSelectedWorkflowRecording,
     labFeedback,
+    currentPrimaryTaskSegment,
+    currentTaskLineage,
+    currentSideBranchSegment,
+    recentTaskDecisions,
+    timeline,
+    taskDecisionCount,
+    lastTaskDecisionAt,
+    pendingTaskObservations,
+    taskLineages,
+    taskMetrics,
+    continuousModeState,
+    currentSessionId,
+    applyUserTaskCorrection,
+    startSession,
+    stopSession,
+    runTaskReconciliation,
     promptForAccessibility,
     requestScreenCapturePermission,
     runCaptureInspection,
@@ -185,6 +304,150 @@ function App() {
     selectedFixture?.lastRun != null
       ? JSON.stringify(selectedFixture.lastRun.observation, null, 2)
       : null;
+  const selectedWorkflowReplay = selectedWorkflowRecording?.lastReplay ?? null;
+  const selectedWorkflowMismatchExport =
+    selectedWorkflowRecording != null && selectedWorkflowReplay != null
+      ? buildWorkflowComparisonExport({
+          recording: selectedWorkflowRecording,
+          replay: selectedWorkflowReplay,
+          mismatchesOnly: true,
+        })
+      : null;
+  const selectedWorkflowFullExport =
+    selectedWorkflowRecording != null && selectedWorkflowReplay != null
+      ? buildWorkflowComparisonExport({
+          recording: selectedWorkflowRecording,
+          replay: selectedWorkflowReplay,
+        })
+      : null;
+  const [workflowStepDrafts, setWorkflowStepDrafts] = useState<
+    Record<string, WorkflowStepDraft>
+  >({});
+  const workflowStepAutosaveTimersRef = useRef<
+    Record<string, ReturnType<typeof setTimeout>>
+  >({});
+
+  useEffect(() => {
+    return () => {
+      for (const timerId of Object.values(workflowStepAutosaveTimersRef.current)) {
+        clearTimeout(timerId);
+      }
+      workflowStepAutosaveTimersRef.current = {};
+    };
+  }, []);
+
+  useEffect(() => {
+    if (selectedWorkflowRecording == null) {
+      setWorkflowStepDrafts({});
+      return;
+    }
+
+    setWorkflowStepDrafts(previousDrafts => {
+      const nextDrafts: Record<string, WorkflowStepDraft> = {};
+
+      for (const step of selectedWorkflowRecording.steps) {
+        nextDrafts[step.id] = previousDrafts[step.id] ?? {
+          expectedKind: step.expectation.expectedKind,
+          expectedDecision: step.expectation.expectedDecision,
+          note: step.expectation.note,
+          importance: step.expectation.importance,
+        };
+      }
+
+      return nextDrafts;
+    });
+  }, [selectedWorkflowRecording?.id, selectedWorkflowRecording?.steps.length]);
+
+  function getWorkflowStepDraft(
+    stepId: string,
+    fallbackExpectation: WorkflowStepExpectation,
+  ): WorkflowStepDraft {
+    return (
+      workflowStepDrafts[stepId] ?? {
+        expectedKind: fallbackExpectation.expectedKind,
+        expectedDecision: fallbackExpectation.expectedDecision,
+        note: fallbackExpectation.note,
+        importance: fallbackExpectation.importance,
+      }
+    );
+  }
+
+  function persistWorkflowStepDraft(
+    recordingId: string,
+    stepId: string,
+    draft: WorkflowStepDraft,
+  ) {
+    saveWorkflowStepExpectation({
+      recordingId,
+      stepId,
+      expectation: {
+        expectedKind: draft.expectedKind,
+        expectedDecision: draft.expectedDecision,
+        note: draft.note,
+        importance: draft.importance,
+        labeledAt: null,
+      },
+    }).catch(() => {});
+  }
+
+  function scheduleWorkflowStepAutosave(
+    recordingId: string,
+    stepId: string,
+    draft: WorkflowStepDraft,
+  ) {
+    const existingTimer = workflowStepAutosaveTimersRef.current[stepId];
+
+    if (existingTimer != null) {
+      clearTimeout(existingTimer);
+    }
+
+    workflowStepAutosaveTimersRef.current[stepId] = setTimeout(() => {
+      persistWorkflowStepDraft(recordingId, stepId, draft);
+      delete workflowStepAutosaveTimersRef.current[stepId];
+    }, 500);
+  }
+
+  function applyMergeCorrection() {
+    if (currentTaskLineage == null) {
+      return;
+    }
+
+    applyUserTaskCorrection({
+      id: `merge_${currentTaskLineage.id}`,
+      type: 'merge_confirmed',
+      segmentIds: currentTaskLineage.segmentIds,
+      lineageIds: [currentTaskLineage.id],
+      note: 'User confirmed these segments belong together.',
+    });
+  }
+
+  function applySplitCorrection() {
+    if (currentPrimaryTaskSegment == null || currentTaskLineage == null) {
+      return;
+    }
+
+    applyUserTaskCorrection({
+      id: `split_${currentPrimaryTaskSegment.id}`,
+      type: 'split_confirmed',
+      segmentIds: [currentPrimaryTaskSegment.id],
+      lineageIds: [currentTaskLineage.id],
+      note: 'User confirmed this should remain a distinct segment.',
+    });
+  }
+
+  function applyResumeCorrection() {
+    if (currentTaskLineage == null) {
+      return;
+    }
+
+    applyUserTaskCorrection({
+      id: `resume_${currentTaskLineage.id}`,
+      type: 'resume_correction_applied',
+      segmentIds: currentTaskLineage.segmentIds,
+      lineageIds: [currentTaskLineage.id],
+      note: 'User confirmed the current work resumes an earlier lineage.',
+    });
+  }
 
   return (
     <ScrollView contentContainerStyle={styles.screen}>
@@ -215,6 +478,66 @@ function App() {
           label="Context Source"
           value={currentContext?.source === 'window' ? 'Precise window' : 'App only'}
         />
+        <View style={styles.buttonRow}>
+          <ActionButton
+            label="Start Session"
+            onPress={startSession}
+            disabled={controlsDisabled}
+          />
+          <ActionButton
+            label="Stop Session"
+            onPress={stopSession}
+            disabled={controlsDisabled}
+            tone="secondary"
+          />
+          <ActionButton
+            label="Reconcile Tasks"
+            onPress={runTaskReconciliation}
+            disabled={controlsDisabled}
+            tone="secondary"
+          />
+        </View>
+      </Section>
+
+      <Section
+        title="Continuous Session"
+        subtitle="Continuous capture and automatic observation generation follow the active session.">
+        <LabelValue
+          label="Mode"
+          value={continuousModeState.currentMode}
+        />
+        <LabelValue
+          label="Auto Observe"
+          value={continuousModeState.autoObserveEnabled ? 'On' : 'Off'}
+        />
+        <LabelValue
+          label="Queue Length"
+          value={String(continuousModeState.observationQueueLength)}
+        />
+        <LabelValue
+          label="Observation In Flight"
+          value={continuousModeState.observationInFlight ? 'Yes' : 'No'}
+        />
+        <LabelValue
+          label="Last Observed At"
+          value={formatTimestamp(continuousModeState.lastObservedAt)}
+        />
+        <LabelValue
+          label="Last Observation Decision"
+          value={formatNullable(continuousModeState.lastObservationDecision)}
+        />
+        <LabelValue
+          label="Consecutive Failures"
+          value={String(continuousModeState.consecutiveFailureCount)}
+        />
+        <Text style={styles.fieldHelp}>
+          {continuousModeState.continuousStatusMessage}
+        </Text>
+        {currentSessionId == null ? (
+          <Text style={styles.fieldHelp}>
+            Start a session to begin continuous capture and automatic observations.
+          </Text>
+        ) : null}
       </Section>
 
       {actionFeedback != null ? (
@@ -367,6 +690,149 @@ function App() {
           <Text style={styles.emptyState}>
             No real observation has run yet.
           </Text>
+        )}
+      </Section>
+
+      <Section
+        title="Task Debugger"
+        subtitle="Inspect the live task engine state, pending observations, and recent decisions.">
+        <TaskDebugger
+          currentPrimaryTaskSegment={currentPrimaryTaskSegment}
+          currentTaskLineage={currentTaskLineage}
+          currentSideBranchSegment={currentSideBranchSegment}
+          recentTaskDecisions={recentTaskDecisions}
+          observationsById={timeline.observationsById}
+          taskDecisionCount={taskDecisionCount}
+          lastTaskDecisionAt={lastTaskDecisionAt}
+          pendingTaskObservations={pendingTaskObservations}
+          taskLineageCount={taskLineages.length}
+          taskMetrics={taskMetrics}
+          styles={{
+            buttonRow: styles.buttonRow,
+            emptyState: styles.emptyState,
+            fixtureList: styles.fixtureList,
+            fixtureRow: styles.fixtureRow,
+            fixtureTitle: styles.fixtureTitle,
+            fixtureMeta: styles.fixtureMeta,
+            fieldHelp: styles.fieldHelp,
+            warningBadge: styles.warningBadge,
+            warningBadgeText: styles.warningBadgeText,
+            taskObservationRow: styles.taskObservationRow,
+            taskObservationImage: styles.taskObservationImage,
+            taskObservationBody: styles.taskObservationBody,
+          }}
+          LabelValue={LabelValue}
+          ActionButton={ActionButton}
+          formatNullable={formatNullable}
+          formatList={formatList}
+          formatTimestamp={formatTimestamp}
+          onMergeConfirm={applyMergeCorrection}
+          onSplitConfirm={applySplitCorrection}
+          onResumeConfirm={applyResumeCorrection}
+          controlsDisabled={controlsDisabled}
+        />
+      </Section>
+
+      <Section
+        title="Workflow Recorder"
+        subtitle="Record real screenshot sequences, label what should happen, and replay them later as a benchmark set.">
+        <TextInput
+          autoCorrect={false}
+          onChangeText={setWorkflowLabelDraft}
+          placeholder="Workflow label"
+          style={styles.input}
+          value={workflowLabelDraft}
+        />
+        <TextInput
+          multiline
+          onChangeText={setWorkflowDescriptionDraft}
+          placeholder="What does this workflow represent?"
+          style={[styles.input, styles.notesInput]}
+          value={workflowDescriptionDraft}
+        />
+        <View style={styles.buttonRow}>
+          <ActionButton
+            label={workflowBusy ? 'Working…' : 'Start Auto Recording'}
+            onPress={() => {
+              startWorkflowRecording('automatic').catch(() => {});
+            }}
+            disabled={workflowBusy || activeWorkflowRecording != null}
+            testID="start-auto-workflow-button"
+          />
+          <ActionButton
+            label={workflowBusy ? 'Working…' : 'Start Manual Recording'}
+            onPress={() => {
+              startWorkflowRecording('manual').catch(() => {});
+            }}
+            disabled={workflowBusy || activeWorkflowRecording != null}
+            tone="secondary"
+            testID="start-manual-workflow-button"
+          />
+          <ActionButton
+            label={workflowBusy ? 'Stopping…' : 'Stop Recording'}
+            onPress={() => {
+              stopWorkflowRecording().catch(() => {});
+            }}
+            disabled={workflowBusy || activeWorkflowRecording == null}
+            tone="secondary"
+          />
+          <ActionButton
+            label={workflowBusy ? 'Capturing…' : 'Capture Step Now'}
+            onPress={() => {
+              recordWorkflowStepNow().catch(() => {});
+            }}
+            disabled={
+              workflowBusy ||
+              activeWorkflowRecording == null ||
+              activeWorkflowRecording.captureMode !== 'manual'
+            }
+            testID="capture-workflow-step-button"
+          />
+        </View>
+        <LabelValue
+          label="Active Workflow"
+          value={formatNullable(activeWorkflowRecording?.label)}
+        />
+        <LabelValue
+          label="Capture Mode"
+          value={formatNullable(activeWorkflowRecording?.captureMode)}
+        />
+        <LabelValue
+          label="Recorded Steps"
+          value={String(activeWorkflowRecording?.steps.length ?? 0)}
+        />
+        <LabelValue
+          label="Workflows Path"
+          value={formatNullable(workflowRecordingsDirectoryPath)}
+        />
+        {workflowRecordings.length === 0 ? (
+          <Text style={styles.emptyState}>
+            No workflow recordings yet. Start recording to build your benchmark set.
+          </Text>
+        ) : (
+          <View style={styles.fixtureList}>
+            {workflowRecordings.map(recording => {
+              const isSelected = recording.id === selectedWorkflowRecordingId;
+
+              return (
+                <Pressable
+                  key={recording.id}
+                  onPress={() => setSelectedWorkflowRecordingId(recording.id)}
+                  style={[
+                    styles.fixtureRow,
+                    isSelected ? styles.fixtureRowSelected : null,
+                  ]}>
+                  <Text style={styles.fixtureTitle}>{recording.label}</Text>
+                  <Text style={styles.fixtureMeta}>
+                    {formatTimestamp(recording.createdAt)}
+                  </Text>
+                  <Text style={styles.fixtureMeta}>
+                    {recording.status} · {recording.captureMode} · {recording.steps.length} steps
+                  </Text>
+                </Pressable>
+              );
+            })}
+          </View>
         )}
       </Section>
 
@@ -557,6 +1023,251 @@ function App() {
             tone="secondary"
             testID="save-fixture-scores-button"
           />
+        </Section>
+      ) : null}
+
+      {selectedWorkflowRecording != null ? (
+        <Section
+          title="Selected Workflow"
+          subtitle="Replay the workflow against the current pipeline and mark what should have happened for each step.">
+          <LabelValue label="Label" value={selectedWorkflowRecording.label} />
+          <LabelValue
+            label="Status"
+            value={`${selectedWorkflowRecording.status} · ${selectedWorkflowRecording.captureMode}`}
+          />
+          <LabelValue
+            label="Started"
+            value={formatTimestamp(selectedWorkflowRecording.startedAt)}
+          />
+          <LabelValue
+            label="Completed"
+            value={formatTimestamp(selectedWorkflowRecording.completedAt)}
+          />
+          <LabelValue
+            label="Replay Summary"
+            value={
+              selectedWorkflowReplay == null
+                ? 'Not replayed'
+                : `${selectedWorkflowReplay.matchedCount} matched · ${selectedWorkflowReplay.mismatchedCount} mismatched · ${selectedWorkflowReplay.unlabeledCount} unlabeled`
+            }
+          />
+          {selectedWorkflowReplay != null ? (
+            <>
+              <Text style={styles.jsonLabel}>Paste To Chat (Mismatches)</Text>
+              <Text style={styles.fieldHelp}>
+                Click this box, press Cmd+A then Cmd+C, then paste into chat.
+              </Text>
+              <TextInput
+                editable={false}
+                multiline
+                selectTextOnFocus
+                style={[styles.input, styles.codeInput, styles.pasteOutputInput]}
+                testID="workflow-mismatches-export"
+                value={selectedWorkflowMismatchExport ?? ''}
+              />
+              <Text style={styles.jsonLabel}>Paste To Chat (All Steps)</Text>
+              <TextInput
+                editable={false}
+                multiline
+                selectTextOnFocus
+                style={[styles.input, styles.codeInput, styles.pasteOutputInput]}
+                testID="workflow-all-steps-export"
+                value={selectedWorkflowFullExport ?? ''}
+              />
+            </>
+          ) : null}
+          {selectedWorkflowRecording.description.length > 0 ? (
+            <Text style={styles.fieldHelp}>{selectedWorkflowRecording.description}</Text>
+          ) : null}
+          <View style={styles.buttonRow}>
+            <ActionButton
+              label={workflowReplayBusy ? 'Replaying…' : 'Replay Selected Workflow'}
+              onPress={() => {
+                replaySelectedWorkflowRecording().catch(() => {});
+              }}
+              disabled={workflowReplayBusy}
+              testID="replay-selected-workflow-button"
+            />
+            <ActionButton
+              label="Delete Workflow"
+              onPress={() => {
+                deleteSelectedWorkflowRecording().catch(() => {});
+              }}
+              disabled={workflowBusy}
+              tone="danger"
+            />
+          </View>
+          {selectedWorkflowRecording.steps.length === 0 ? (
+            <Text style={styles.emptyState}>
+              No steps have been recorded for this workflow yet.
+            </Text>
+          ) : (
+            <View style={styles.fixtureList}>
+              {selectedWorkflowRecording.steps.map(step => {
+                const replayResult =
+                  selectedWorkflowReplay?.stepResults.find(
+                    result => result.stepId === step.id,
+                  ) ?? null;
+                const stepDraft = getWorkflowStepDraft(step.id, step.expectation);
+
+                function updateStepDraft(nextDraft: WorkflowStepDraft) {
+                  setWorkflowStepDrafts(previousDrafts => ({
+                    ...previousDrafts,
+                    [step.id]: nextDraft,
+                  }));
+                }
+
+                function setStepExpectedKind(expectedKind: WorkflowStepExpectationKind) {
+                  const nextDraft: WorkflowStepDraft = {
+                    ...stepDraft,
+                    expectedKind,
+                  };
+                  updateStepDraft(nextDraft);
+                  persistWorkflowStepDraft(
+                    selectedWorkflowRecording.id,
+                    step.id,
+                    nextDraft,
+                  );
+                }
+
+                return (
+                  <View key={step.id} style={styles.fixtureRow}>
+                    <Text style={styles.fixtureTitle}>{step.label}</Text>
+                    <Text style={styles.fixtureMeta}>
+                      {formatTimestamp(step.recordedAt)}
+                    </Text>
+                    <Text style={styles.fixtureMeta}>
+                      Recorded: {formatNullable(step.recordedTaskDebug?.decision)}
+                    </Text>
+                    <Text style={styles.fixtureMeta}>
+                      Replay: {formatNullable(replayResult?.decision)} ·{' '}
+                      {formatWorkflowMatch(replayResult?.matchedExpectation)}
+                    </Text>
+                    <Text style={styles.fixtureMeta}>
+                      Expected: {formatNullable(stepDraft.expectedKind)} · Exact:{' '}
+                      {formatNullable(stepDraft.expectedDecision)}
+                    </Text>
+                    {replayResult?.mismatchReason != null ? (
+                      <Text style={styles.fieldHelp}>{replayResult.mismatchReason}</Text>
+                    ) : null}
+                    <View style={styles.buttonRow}>
+                      <ActionButton
+                        label="Same Task"
+                        onPress={() => {
+                          setStepExpectedKind('same_task');
+                        }}
+                        disabled={workflowBusy}
+                        tone={
+                          stepDraft.expectedKind === 'same_task'
+                            ? 'primary'
+                            : 'secondary'
+                        }
+                      />
+                      <ActionButton
+                        label="Switch"
+                        onPress={() => {
+                          setStepExpectedKind('switch_task');
+                        }}
+                        disabled={workflowBusy}
+                        tone={
+                          stepDraft.expectedKind === 'switch_task'
+                            ? 'primary'
+                            : 'secondary'
+                        }
+                      />
+                      <ActionButton
+                        label="Resume"
+                        onPress={() => {
+                          setStepExpectedKind('resume_task');
+                        }}
+                        disabled={workflowBusy}
+                        tone={
+                          stepDraft.expectedKind === 'resume_task'
+                            ? 'primary'
+                            : 'secondary'
+                        }
+                      />
+                      <ActionButton
+                        label="Interruption"
+                        onPress={() => {
+                          setStepExpectedKind('temporary_interruption');
+                        }}
+                        disabled={workflowBusy}
+                        tone={
+                          stepDraft.expectedKind === 'temporary_interruption'
+                            ? 'primary'
+                            : 'secondary'
+                        }
+                      />
+                      <ActionButton
+                        label={workflowBusy ? 'Saving…' : 'Save Step Labels'}
+                        onPress={() => {
+                          persistWorkflowStepDraft(
+                            selectedWorkflowRecording.id,
+                            step.id,
+                            stepDraft,
+                          );
+                        }}
+                        disabled={workflowBusy}
+                        tone="secondary"
+                      />
+                    </View>
+                    <TextInput
+                      autoCorrect={false}
+                      onBlur={() => {
+                        persistWorkflowStepDraft(
+                          selectedWorkflowRecording.id,
+                          step.id,
+                          stepDraft,
+                        );
+                      }}
+                      onChangeText={value => {
+                        const nextDraft: WorkflowStepDraft = {
+                          ...stepDraft,
+                          expectedDecision: value,
+                        };
+                        updateStepDraft(nextDraft);
+                        scheduleWorkflowStepAutosave(
+                          selectedWorkflowRecording.id,
+                          step.id,
+                          nextDraft,
+                        );
+                      }}
+                      placeholder="Optional exact engine decision"
+                      style={styles.input}
+                      value={stepDraft.expectedDecision ?? ''}
+                    />
+                    <TextInput
+                      autoCorrect={false}
+                      multiline
+                      onBlur={() => {
+                        persistWorkflowStepDraft(
+                          selectedWorkflowRecording.id,
+                          step.id,
+                          stepDraft,
+                        );
+                      }}
+                      onChangeText={value => {
+                        const nextDraft: WorkflowStepDraft = {
+                          ...stepDraft,
+                          note: value,
+                        };
+                        updateStepDraft(nextDraft);
+                        scheduleWorkflowStepAutosave(
+                          selectedWorkflowRecording.id,
+                          step.id,
+                          nextDraft,
+                        );
+                      }}
+                      placeholder="Why should this behave that way?"
+                      style={[styles.input, styles.notesInput]}
+                      value={stepDraft.note}
+                    />
+                  </View>
+                );
+              })}
+            </View>
+          )}
         </Section>
       ) : null}
     </ScrollView>
@@ -759,6 +1470,35 @@ const styles = StyleSheet.create({
     fontSize: 12,
     color: '#6f5b48',
   },
+  taskObservationRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 12,
+  },
+  taskObservationImage: {
+    width: 96,
+    height: 72,
+    borderRadius: 10,
+    backgroundColor: '#efe6d8',
+  },
+  taskObservationBody: {
+    flex: 1,
+    gap: 4,
+  },
+  warningBadge: {
+    alignSelf: 'flex-start',
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    borderRadius: 999,
+    backgroundColor: '#fff3d9',
+    borderWidth: 1,
+    borderColor: '#f2c96d',
+  },
+  warningBadgeText: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: '#8a5a00',
+  },
   scoreRow: {
     gap: 8,
   },
@@ -792,6 +1532,12 @@ const styles = StyleSheet.create({
   },
   scoreButtonLabelActive: {
     color: '#fffaf3',
+  },
+  pasteOutputInput: {
+    minHeight: 130,
+    textAlignVertical: 'top',
+    fontSize: 12,
+    lineHeight: 18,
   },
 });
 

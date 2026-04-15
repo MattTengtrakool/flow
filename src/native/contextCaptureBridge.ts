@@ -170,6 +170,13 @@ export async function captureNow(): Promise<CaptureResultPayload> {
       perceptualHash: null,
       errorMessage: 'Native capture bridge unavailable in this environment.',
       previewByteLength: 0,
+      privacyRedaction: {
+        checked: false,
+        applied: false,
+        version: 'capture-privacy-v1',
+        matchCount: 0,
+        matchTypes: [],
+      },
     },
     previewBase64: null,
     previewMimeType: null,

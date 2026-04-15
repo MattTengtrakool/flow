@@ -15,6 +15,27 @@ static const CGFloat kQualityStep = 0.05;
 static const NSUInteger kMaxOCRTextLength = 4000;
 static const size_t kDHashWidth = 9;
 static const size_t kDHashHeight = 8;
+static const CGFloat kPrivacyMaskPadding = 6.0;
+static NSString *const kCapturePrivacyVersion = @"capture-privacy-v1";
+
+@interface CapturePrivacyRedactionResult : NSObject
+
+@property (nonatomic, assign, nullable) CGImageRef image;
+@property (nonatomic, copy, nullable) NSString *ocrText;
+@property (nonatomic, assign) BOOL checked;
+@property (nonatomic, assign) BOOL applied;
+@property (nonatomic, assign) NSUInteger matchCount;
+@property (nonatomic, copy) NSArray<NSString *> *matchTypes;
+
+- (instancetype)initWithImage:(nullable CGImageRef)image
+                      ocrText:(nullable NSString *)ocrText
+                      checked:(BOOL)checked
+                      applied:(BOOL)applied
+                   matchCount:(NSUInteger)matchCount
+                   matchTypes:(NSArray<NSString *> *)matchTypes NS_DESIGNATED_INITIALIZER;
+- (NSDictionary *)payload;
+
+@end
 
 @interface ContextCaptureModule () <RCTBridgeModule>
 
@@ -26,6 +47,60 @@ static const size_t kDHashHeight = 8;
 @property (nonatomic, strong, nullable) id workspaceActivationObserver;
 @property (nonatomic, strong, nullable) NSDictionary *lastSnapshot;
 @property (nonatomic, strong, nullable) NSDictionary *lastExternalContextSeed;
+
+@end
+
+@implementation CapturePrivacyRedactionResult
+
+- (instancetype)init
+{
+  return [self initWithImage:nil
+                     ocrText:nil
+                     checked:NO
+                     applied:NO
+                  matchCount:0
+                  matchTypes:@[]];
+}
+
+- (instancetype)initWithImage:(nullable CGImageRef)image
+                      ocrText:(nullable NSString *)ocrText
+                      checked:(BOOL)checked
+                      applied:(BOOL)applied
+                   matchCount:(NSUInteger)matchCount
+                   matchTypes:(NSArray<NSString *> *)matchTypes
+{
+  self = [super init];
+
+  if (self != nil) {
+    _image = image != nil ? CGImageRetain(image) : nil;
+    _ocrText = [ocrText copy];
+    _checked = checked;
+    _applied = applied;
+    _matchCount = matchCount;
+    _matchTypes = [matchTypes copy];
+  }
+
+  return self;
+}
+
+- (void)dealloc
+{
+  if (_image != nil) {
+    CGImageRelease(_image);
+    _image = nil;
+  }
+}
+
+- (NSDictionary *)payload
+{
+  return @{
+    @"checked": @(self.checked),
+    @"applied": @(self.applied),
+    @"version": kCapturePrivacyVersion,
+    @"matchCount": @(self.matchCount),
+    @"matchTypes": self.matchTypes ?: @[]
+  };
+}
 
 @end
 
@@ -112,6 +187,97 @@ RCT_EXPORT_MODULE();
 {
   return [[value lowercaseString]
       stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
+}
+
+- (BOOL)text:(NSString *)text matchesPattern:(NSString *)pattern
+{
+  NSError *error = nil;
+  NSRegularExpression *expression =
+      [NSRegularExpression regularExpressionWithPattern:pattern options:0 error:&error];
+
+  if (expression == nil || error != nil) {
+    return NO;
+  }
+
+  NSRange range = NSMakeRange(0, text.length);
+  return [expression firstMatchInString:text options:0 range:range] != nil;
+}
+
+- (BOOL)string:(NSString *)value containsAnySubstring:(NSArray<NSString *> *)substrings
+{
+  for (NSString *substring in substrings) {
+    if ([value containsString:substring]) {
+      return YES;
+    }
+  }
+
+  return NO;
+}
+
+- (nullable NSString *)privacyMatchTypeForText:(NSString *)text
+                                  previousText:(nullable NSString *)previousText
+                                      nextText:(nullable NSString *)nextText
+{
+  NSString *normalized = [self normalizedString:text];
+
+  if (normalized.length == 0) {
+    return nil;
+  }
+
+  NSArray<NSString *> *secretContextKeywords = @[
+    @"password",
+    @"passcode",
+    @"verification code",
+    @"one-time code",
+    @"secret",
+    @"token",
+    @"api key",
+    @"access key",
+    @"private key",
+    @"recovery code",
+    @"backup code",
+    @"otp",
+    @"2fa",
+    @"auth code"
+  ];
+  NSString *previousNormalized = previousText != nil ? [self normalizedString:previousText] : @"";
+  NSString *nextNormalized = nextText != nil ? [self normalizedString:nextText] : @"";
+  NSString *nearbyContext =
+      [NSString stringWithFormat:@"%@ %@", previousNormalized, nextNormalized];
+
+  if ([self string:normalized containsAnySubstring:secretContextKeywords]) {
+    return @"secret_label";
+  }
+
+  if ([self string:nearbyContext containsAnySubstring:secretContextKeywords]) {
+    return @"secret_value";
+  }
+
+  if ([self text:text matchesPattern:@"(?i)\\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\\.[A-Z]{2,}\\b"]) {
+    return @"email";
+  }
+
+  if ([self text:text matchesPattern:@"\\b(?:\\d[ -]*?){13,19}\\b"]) {
+    return @"payment_card";
+  }
+
+  if ([self text:text matchesPattern:@"(?:^|\\b)\\+?\\d[\\d\\s().-]{7,}\\d(?:$|\\b)"]) {
+    return @"phone";
+  }
+
+  if ([self text:text matchesPattern:@"(?i)\\b(?:sk-[A-Za-z0-9]{16,}|gh[pousr]_[A-Za-z0-9]{20,}|AIza[0-9A-Za-z\\-_]{20,}|AKIA[0-9A-Z]{16}|xox[baprs]-[A-Za-z0-9-]{10,})\\b"]) {
+    return @"access_token";
+  }
+
+  if ([normalized containsString:@"-----begin"] && [normalized containsString:@"private key"]) {
+    return @"private_key";
+  }
+
+  if ([self text:text matchesPattern:@"\\b(?=.*[A-Za-z])(?=.*\\d)[A-Za-z0-9_\\-]{24,}\\b"]) {
+    return @"high_entropy_secret";
+  }
+
+  return nil;
 }
 
 - (NSDictionary *)dictionaryForRect:(CGRect)rect
@@ -988,29 +1154,39 @@ RCT_REMAP_METHOD(inspectCaptureTarget,
                               properties:@{NSImageCompressionFactor: @(kMinimumJPEGQuality)}];
 }
 
-- (nullable NSString *)recognizeTextInImage:(CGImageRef)image
+- (nullable NSArray<NSDictionary *> *)recognizedTextItemsInImage:(CGImageRef)image
+                                                           error:(NSError **)error
 {
   if (image == nil) {
-    return nil;
+    return @[];
   }
 
   VNImageRequestHandler *handler =
       [[VNImageRequestHandler alloc] initWithCGImage:image options:@{}];
-
-  __block NSMutableArray<NSString *> *lines = [NSMutableArray array];
-
+  const NSUInteger imageWidth = CGImageGetWidth(image);
+  const NSUInteger imageHeight = CGImageGetHeight(image);
+  __block NSError *requestError = nil;
+  __block NSMutableArray<NSDictionary *> *items = [NSMutableArray array];
   VNRecognizeTextRequest *request =
-      [[VNRecognizeTextRequest alloc] initWithCompletionHandler:^(VNRequest *req, NSError *error) {
-        if (error != nil) {
+      [[VNRecognizeTextRequest alloc] initWithCompletionHandler:^(VNRequest *req, NSError *completionError) {
+        if (completionError != nil) {
+          requestError = completionError;
           return;
         }
 
         for (VNRecognizedTextObservation *observation in req.results) {
           VNRecognizedText *topCandidate = [[observation topCandidates:1] firstObject];
 
-          if (topCandidate != nil && topCandidate.string.length > 0) {
-            [lines addObject:topCandidate.string];
+          if (topCandidate == nil || topCandidate.string.length == 0) {
+            continue;
           }
+
+          CGRect boundingBox =
+              VNImageRectForNormalizedRect(observation.boundingBox, imageWidth, imageHeight);
+          [items addObject:@{
+            @"text": topCandidate.string,
+            @"boundingBox": [NSValue valueWithRect:NSRectFromCGRect(boundingBox)]
+          }];
         }
       }];
 
@@ -1020,7 +1196,36 @@ RCT_REMAP_METHOD(inspectCaptureTarget,
   NSError *performError = nil;
   [handler performRequests:@[request] error:&performError];
 
-  if (performError != nil || lines.count == 0) {
+  if (performError != nil) {
+    if (error != nil) {
+      *error = performError;
+    }
+    return nil;
+  }
+
+  if (requestError != nil) {
+    if (error != nil) {
+      *error = requestError;
+    }
+    return nil;
+  }
+
+  return items;
+}
+
+- (nullable NSString *)joinedOCRTextFromRecognizedItems:(NSArray<NSDictionary *> *)items
+{
+  NSMutableArray<NSString *> *lines = [NSMutableArray array];
+
+  for (NSDictionary *item in items) {
+    NSString *text = item[@"text"];
+
+    if (text.length > 0) {
+      [lines addObject:text];
+    }
+  }
+
+  if (lines.count == 0) {
     return nil;
   }
 
@@ -1031,6 +1236,156 @@ RCT_REMAP_METHOD(inspectCaptureTarget,
   }
 
   return joined;
+}
+
+- (NSArray<NSDictionary *> *)sensitiveTextMatchesFromRecognizedItems:(NSArray<NSDictionary *> *)items
+{
+  NSMutableArray<NSDictionary *> *matches = [NSMutableArray array];
+
+  for (NSUInteger index = 0; index < items.count; index += 1) {
+    NSDictionary *item = items[index];
+    NSString *text = item[@"text"];
+    NSString *previousText = index > 0 ? items[index - 1][@"text"] : nil;
+    NSString *nextText = index + 1 < items.count ? items[index + 1][@"text"] : nil;
+    NSString *matchType =
+        [self privacyMatchTypeForText:text previousText:previousText nextText:nextText];
+
+    if (matchType == nil) {
+      continue;
+    }
+
+    [matches addObject:@{
+      @"matchType": matchType,
+      @"boundingBox": item[@"boundingBox"]
+    }];
+  }
+
+  return matches;
+}
+
+- (nullable CGImageRef)newImageByRedactingMatches:(NSArray<NSDictionary *> *)matches
+                                          inImage:(CGImageRef)image
+{
+  if (image == nil) {
+    return nil;
+  }
+
+  const size_t width = CGImageGetWidth(image);
+  const size_t height = CGImageGetHeight(image);
+  CGColorSpaceRef colorSpace = CGColorSpaceCreateDeviceRGB();
+  CGContextRef context = CGBitmapContextCreate(
+      NULL,
+      width,
+      height,
+      8,
+      0,
+      colorSpace,
+      (CGBitmapInfo)kCGImageAlphaPremultipliedLast);
+  CGColorSpaceRelease(colorSpace);
+
+  if (context == nil) {
+    return nil;
+  }
+
+  CGContextDrawImage(context, CGRectMake(0, 0, width, height), image);
+  CGContextSetRGBFillColor(context, 0, 0, 0, 1);
+  CGRect imageBounds = CGRectMake(0, 0, width, height);
+
+  for (NSDictionary *match in matches) {
+    NSValue *rectValue = match[@"boundingBox"];
+    CGRect rect = NSRectToCGRect(rectValue.rectValue);
+    CGRect paddedRect = CGRectInset(rect, -kPrivacyMaskPadding, -kPrivacyMaskPadding);
+    CGRect clippedRect = CGRectIntersection(imageBounds, paddedRect);
+
+    if (!CGRectIsNull(clippedRect) && !CGRectIsEmpty(clippedRect)) {
+      CGContextFillRect(context, clippedRect);
+    }
+  }
+
+  CGImageRef redactedImage = CGBitmapContextCreateImage(context);
+  CGContextRelease(context);
+  return redactedImage;
+}
+
+- (CapturePrivacyRedactionResult *)privacyRedactionResultForImage:(CGImageRef)image
+{
+  if (image == nil) {
+    return [[CapturePrivacyRedactionResult alloc] initWithImage:nil
+                                                        ocrText:nil
+                                                        checked:NO
+                                                        applied:NO
+                                                     matchCount:0
+                                                     matchTypes:@[]];
+  }
+
+  NSError *recognitionError = nil;
+  NSArray<NSDictionary *> *recognizedItems =
+      [self recognizedTextItemsInImage:image error:&recognitionError];
+
+  if (recognizedItems == nil) {
+    return [[CapturePrivacyRedactionResult alloc] initWithImage:image
+                                                        ocrText:nil
+                                                        checked:NO
+                                                        applied:NO
+                                                     matchCount:0
+                                                     matchTypes:@[]];
+  }
+
+  NSArray<NSDictionary *> *matches =
+      [self sensitiveTextMatchesFromRecognizedItems:recognizedItems];
+
+  if (matches.count == 0) {
+    return [[CapturePrivacyRedactionResult alloc]
+        initWithImage:image
+              ocrText:[self joinedOCRTextFromRecognizedItems:recognizedItems]
+              checked:YES
+              applied:NO
+           matchCount:0
+           matchTypes:@[]];
+  }
+
+  CGImageRef redactedImage = [self newImageByRedactingMatches:matches inImage:image];
+
+  if (redactedImage == nil) {
+    return [[CapturePrivacyRedactionResult alloc] initWithImage:image
+                                                        ocrText:nil
+                                                        checked:NO
+                                                        applied:NO
+                                                     matchCount:0
+                                                     matchTypes:@[]];
+  }
+
+  NSMutableOrderedSet<NSString *> *matchTypes = [NSMutableOrderedSet orderedSet];
+
+  for (NSDictionary *match in matches) {
+    NSString *matchType = match[@"matchType"];
+
+    if (matchType.length > 0) {
+      [matchTypes addObject:matchType];
+    }
+  }
+
+  CapturePrivacyRedactionResult *result =
+      [[CapturePrivacyRedactionResult alloc] initWithImage:redactedImage
+                                                   ocrText:[self recognizeTextInImage:redactedImage]
+                                                   checked:YES
+                                                   applied:YES
+                                                matchCount:matches.count
+                                                matchTypes:matchTypes.array];
+  CGImageRelease(redactedImage);
+  return result;
+}
+
+- (nullable NSString *)recognizeTextInImage:(CGImageRef)image
+{
+  NSError *error = nil;
+  NSArray<NSDictionary *> *items = [self recognizedTextItemsInImage:image error:&error];
+
+  if (items == nil || items.count == 0) {
+    return nil;
+  }
+
+  return [self joinedOCRTextFromRecognizedItems:items];
 }
 
 - (NSDictionary *)errorCaptureResultWithInspection:(NSDictionary *)inspection
@@ -1058,7 +1413,14 @@ RCT_REMAP_METHOD(inspectCaptureTarget,
       @"frameHash": NSNull.null,
       @"perceptualHash": NSNull.null,
       @"errorMessage": [self nullableValue:errorMessage],
-      @"previewByteLength": @0
+      @"previewByteLength": @0,
+      @"privacyRedaction": @{
+        @"checked": @NO,
+        @"applied": @NO,
+        @"version": kCapturePrivacyVersion,
+        @"matchCount": @0,
+        @"matchTypes": @[]
+      }
     },
     @"previewBase64": NSNull.null,
     @"previewMimeType": NSNull.null,
@@ -1155,9 +1517,14 @@ RCT_REMAP_METHOD(captureNow,
                                  size_t imageHeight = CGImageGetHeight(image);
 
                                  dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
-                                   NSData *jpegData = [self jpegDataForImage:image maxBytes:kMaxPreviewBytes];
-                                   NSString *ocrText = [self recognizeTextInImage:image];
-                                   NSString *perceptualHash = [self dHashForImage:image];
+                                   CapturePrivacyRedactionResult *privacyResult =
+                                       [self privacyRedactionResultForImage:image];
+                                   CGImageRef captureImage =
+                                       privacyResult.image != nil ? privacyResult.image : image;
+                                   NSData *jpegData =
+                                       [self jpegDataForImage:captureImage maxBytes:kMaxPreviewBytes];
+                                   NSString *ocrText = privacyResult.ocrText;
+                                   NSString *perceptualHash = [self dHashForImage:captureImage];
 
                                    CGImageRelease(image);
 
@@ -1184,7 +1551,8 @@ RCT_REMAP_METHOD(captureNow,
                                        @"frameHash": [self nullableValue:frameHash],
                                        @"perceptualHash": [self nullableValue:perceptualHash],
                                        @"errorMessage": NSNull.null,
-                                       @"previewByteLength": @(jpegData.length)
+                                       @"previewByteLength": @(jpegData.length),
+                                       @"privacyRedaction": [privacyResult payload]
                                      },
                                      @"previewBase64": [self nullableValue:base64],
                                      @"previewMimeType": base64 != nil ? @"image/jpeg" : NSNull.null,

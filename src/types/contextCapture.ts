@@ -54,6 +54,14 @@ export type CaptureInspectionPayload = {
   candidates: CaptureCandidatePayload[];
 };
 
+export type CapturePrivacyRedactionPayload = {
+  checked: boolean;
+  applied: boolean;
+  version: string;
+  matchCount: number;
+  matchTypes: string[];
+};
+
 export type CaptureMetadataPayload = {
   capturedAt: string;
   status: 'captured' | 'permission_required' | 'error';
@@ -71,6 +79,7 @@ export type CaptureMetadataPayload = {
   perceptualHash: string | null;
   errorMessage: string | null;
   previewByteLength: number;
+  privacyRedaction: CapturePrivacyRedactionPayload;
   staleFrame: boolean;
   blankFrame: boolean;
 };

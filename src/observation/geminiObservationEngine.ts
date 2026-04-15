@@ -1,5 +1,11 @@
 import {GEMINI_API_KEY} from '@env';
 
+import {
+  redactSensitiveText,
+  sanitizeCaptureMetadata,
+  sanitizeContextSnapshot,
+  sanitizeInspection,
+} from '../privacy/redaction';
 import {createOccurredAt} from '../state/eventLog';
 import type {ObservationEngineInput, ObservationRun} from './types';
 import {
@@ -114,32 +120,37 @@ const GEMINI_OBSERVATION_SCHEMA = toGeminiSchema(
 );
 
 function buildObservationPrompt(input: ObservationEngineInput): string {
+  const sanitizedContext = sanitizeContextSnapshot(input.currentContext);
+  const sanitizedCapture = sanitizeCaptureMetadata(input.capture);
+  const sanitizedInspection = sanitizeInspection(input.inspection);
+  const sanitizedOCRText = redactSensitiveText(input.ocrText);
   const recentObservationSummaries = input.recentObservations
     .slice(-3)
     .map(observation => ({
-      summary: observation.summary,
+      summary: redactSensitiveText(observation.summary),
       activityType: observation.activityType,
-      taskHypothesis: observation.taskHypothesis,
+      taskHypothesis: redactSensitiveText(observation.taskHypothesis),
     }));
 
   const metadata = {
-    currentContext: input.currentContext,
+    currentContext: sanitizedContext,
     capture: {
-      capturedAt: input.capture.capturedAt,
-      appName: input.capture.appName,
-      bundleIdentifier: input.capture.bundleIdentifier,
-      windowTitle: input.capture.windowTitle,
-      targetType: input.capture.targetType,
-      width: input.capture.width,
-      height: input.capture.height,
-      frameHash: input.capture.frameHash,
-      confidence: input.capture.confidence,
+      capturedAt: sanitizedCapture.capturedAt,
+      appName: sanitizedCapture.appName,
+      bundleIdentifier: sanitizedCapture.bundleIdentifier,
+      windowTitle: sanitizedCapture.windowTitle,
+      targetType: sanitizedCapture.targetType,
+      width: sanitizedCapture.width,
+      height: sanitizedCapture.height,
+      frameHash: sanitizedCapture.frameHash,
+      confidence: sanitizedCapture.confidence,
+      privacyRedaction: sanitizedCapture.privacyRedaction,
     },
     inspection: {
-      chosenTargetType: input.inspection.chosenTargetType,
-      confidence: input.inspection.confidence,
-      fallbackReason: input.inspection.fallbackReason,
-      chosenTarget: input.inspection.chosenTarget,
+      chosenTargetType: sanitizedInspection.chosenTargetType,
+      confidence: sanitizedInspection.confidence,
+      fallbackReason: sanitizedInspection.fallbackReason,
+      chosenTarget: sanitizedInspection.chosenTarget,
     },
     recentObservations: recentObservationSummaries,
   };
@@ -152,12 +163,19 @@ function buildObservationPrompt(input: ObservationEngineInput): string {
     'Confidence must be between 0 and 1.',
     'Sensitivity should reflect whether the visible content appears routine, somewhat sensitive, or highly sensitive.',
     '',
+    'taskHypothesis: derive this FRESH from visible screen content (window titles, file names, UI elements, visible text).',
+    'Do NOT copy a previous taskHypothesis unless the current screenshot clearly shows the same specific work.',
+    'If the screen shows a different app, document, or focus than the previous observations, write a NEW hypothesis.',
+    'Set taskHypothesis to null when the current task is ambiguous or the screen lacks task-specific context.',
+    '',
+    'Recent observations are provided for temporal context only — re-evaluate all fields independently based on current evidence.',
+    '',
     'Metadata:',
     JSON.stringify(metadata, null, 2),
   ];
 
-  if (input.ocrText != null && input.ocrText.length > 0) {
-    lines.push('', 'OCR text extracted from the screenshot:', input.ocrText);
+  if (sanitizedOCRText != null && sanitizedOCRText.length > 0) {
+    lines.push('', 'OCR text extracted from the screenshot:', sanitizedOCRText);
   }
 
   return lines.join('\n');
@@ -203,6 +221,7 @@ export async function generateObservation(
         response_mime_type: 'application/json',
         response_schema: GEMINI_OBSERVATION_SCHEMA,
         max_output_tokens: 4096,
+        temperature: 0.4,
       },
     }),
   });
