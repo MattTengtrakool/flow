@@ -1,3 +1,5 @@
+import {GEMINI_API_KEY} from '@env';
+
 import {createOccurredAt} from '../state/eventLog';
 import type {ObservationEngineInput, ObservationRun} from './types';
 import {
@@ -44,24 +46,59 @@ function extractOutputText(response: GeminiResponse): string | null {
   return null;
 }
 
-function stripStringLengthConstraints(
-  schema: Record<string, unknown>,
+const GEMINI_TYPE_MAP: Record<string, string> = {
+  string: 'STRING',
+  number: 'NUMBER',
+  integer: 'INTEGER',
+  boolean: 'BOOLEAN',
+  object: 'OBJECT',
+  array: 'ARRAY',
+};
+
+const UNSUPPORTED_KEYS = new Set([
+  'minLength',
+  'maxLength',
+  'maxItems',
+  'additionalProperties',
+]);
+
+function toGeminiSchema(
+  node: Record<string, unknown>,
 ): Record<string, unknown> {
   const result: Record<string, unknown> = {};
 
-  for (const [key, value] of Object.entries(schema)) {
-    if (key === 'minLength' || key === 'maxLength') {
+  for (const [key, value] of Object.entries(node)) {
+    if (UNSUPPORTED_KEYS.has(key)) {
+      continue;
+    }
+
+    if (key === 'type') {
+      if (Array.isArray(value)) {
+        const types = value.filter(t => t !== 'null');
+        const hasNull = value.includes('null');
+
+        if (types.length === 1) {
+          result.type = GEMINI_TYPE_MAP[types[0] as string] ?? types[0];
+        }
+
+        if (hasNull) {
+          result.nullable = true;
+        }
+      } else if (typeof value === 'string') {
+        result.type = GEMINI_TYPE_MAP[value] ?? value;
+      } else {
+        result.type = value;
+      }
+
       continue;
     }
 
     if (value != null && typeof value === 'object' && !Array.isArray(value)) {
-      result[key] = stripStringLengthConstraints(
-        value as Record<string, unknown>,
-      );
+      result[key] = toGeminiSchema(value as Record<string, unknown>);
     } else if (Array.isArray(value)) {
       result[key] = value.map(item =>
         item != null && typeof item === 'object' && !Array.isArray(item)
-          ? stripStringLengthConstraints(item as Record<string, unknown>)
+          ? toGeminiSchema(item as Record<string, unknown>)
           : item,
       );
     } else {
@@ -72,7 +109,7 @@ function stripStringLengthConstraints(
   return result;
 }
 
-const GEMINI_OBSERVATION_SCHEMA = stripStringLengthConstraints(
+const GEMINI_OBSERVATION_SCHEMA = toGeminiSchema(
   STRUCTURED_OBSERVATION_JSON_SCHEMA as unknown as Record<string, unknown>,
 );
 
@@ -127,11 +164,10 @@ function buildObservationPrompt(input: ObservationEngineInput): string {
 }
 
 export async function generateObservation(
-  apiKey: string,
   input: ObservationEngineInput,
   model = DEFAULT_OBSERVATION_MODEL,
 ): Promise<ObservationRun> {
-  const trimmedApiKey = apiKey.trim();
+  const trimmedApiKey = (GEMINI_API_KEY ?? '').trim();
 
   if (trimmedApiKey.length === 0) {
     throw new Error(

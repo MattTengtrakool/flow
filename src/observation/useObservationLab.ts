@@ -45,10 +45,6 @@ const EMPTY_RATING: ObservationFixtureRating = {
   ratedAt: null,
 };
 
-function getEffectiveModel(model: string): string {
-  const trimmedModel = model.trim();
-  return trimmedModel.length > 0 ? trimmedModel : DEFAULT_OBSERVATION_MODEL;
-}
 
 function createLabFeedback(
   message: string,
@@ -220,7 +216,7 @@ export function useObservationLab() {
     try {
       const nextSettings: ObservationSettings = {
         apiKey: settings.apiKey.trim(),
-        model: getEffectiveModel(settings.model),
+        model: settings.model.trim().length > 0 ? settings.model.trim() : DEFAULT_OBSERVATION_MODEL,
         savedAt: createOccurredAt(),
       };
       const payload = await saveObservationSettings(nextSettings);
@@ -276,7 +272,6 @@ export function useObservationLab() {
 
     try {
       const run = await generateObservation(
-        settings.apiKey,
         {
           imageBase64,
           imageMimeType,
@@ -286,7 +281,6 @@ export function useObservationLab() {
           currentContext,
           recentObservations: recentStructuredObservations,
         },
-        getEffectiveModel(settings.model),
       );
 
       startTransition(() => {
@@ -395,7 +389,6 @@ export function useObservationLab() {
 
     try {
       const run = await generateObservation(
-        settings.apiKey,
         {
           imageBase64: fixture.imageBase64,
           imageMimeType: fixture.imageMimeType,
@@ -405,7 +398,6 @@ export function useObservationLab() {
           currentContext: fixture.inspection.context,
           recentObservations: [],
         },
-        getEffectiveModel(settings.model),
       );
       const nextFixture: ObservationFixtureRecord = {
         ...fixture,
@@ -457,7 +449,6 @@ export function useObservationLab() {
     for (const fixture of fixtures) {
       try {
         const run = await generateObservation(
-          settings.apiKey,
           {
             imageBase64: fixture.imageBase64,
             imageMimeType: fixture.imageMimeType,
@@ -467,7 +458,6 @@ export function useObservationLab() {
             currentContext: fixture.inspection.context,
             recentObservations: [],
           },
-          getEffectiveModel(settings.model),
         );
 
         await persistFixture({

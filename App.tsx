@@ -144,11 +144,6 @@ function App() {
     actionFeedback,
     surfaceErrorMessage,
     currentContext,
-    settings,
-    setSettings,
-    saveSettings,
-    settingsBusy,
-    settingsPath,
     latestObservationRun,
     observeLatestCapture,
     observationBusy,
@@ -346,52 +341,7 @@ function App() {
       <Section
         title="Observation Engine"
         subtitle="This is the new Stage 8 path: screenshot plus metadata goes to a real vision model and must come back as strict JSON.">
-        <Text style={styles.fieldLabel}>Google AI API Key</Text>
-        <TextInput
-          autoCapitalize="none"
-          autoCorrect={false}
-          autoComplete="off"
-          onChangeText={value => {
-            setSettings(previousSettings => ({
-              ...previousSettings,
-              apiKey: value,
-            }));
-          }}
-          placeholder="Paste your Google AI API key here"
-          style={[styles.input, styles.codeInput]}
-          value={settings.apiKey}
-          testID="gemini-api-key-input"
-        />
-        <Text style={styles.fieldHelp}>
-          Paste your key into this box, then click `Save Settings`. It is stored
-          locally on this Mac at the path shown below.
-        </Text>
-        <Text style={styles.fieldLabel}>Model</Text>
-        <TextInput
-          autoCapitalize="none"
-          autoCorrect={false}
-          autoComplete="off"
-          onChangeText={value => {
-            setSettings(previousSettings => ({
-              ...previousSettings,
-              model: value,
-            }));
-          }}
-          placeholder="gemini-2.5-flash-lite"
-          style={[styles.input, styles.codeInput]}
-          value={settings.model}
-          testID="gemini-model-input"
-        />
-        <LabelValue label="Settings Path" value={formatNullable(settingsPath)} />
         <View style={styles.buttonRow}>
-          <ActionButton
-            label={settingsBusy ? 'Saving…' : 'Save Settings'}
-            onPress={() => {
-              saveSettings().catch(() => {});
-            }}
-            disabled={settingsBusy}
-            tone="secondary"
-          />
           <ActionButton
             label={observationBusy ? 'Observing…' : 'Observe Last Capture'}
             onPress={() => {
