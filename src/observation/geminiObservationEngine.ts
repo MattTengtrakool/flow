@@ -6,7 +6,7 @@ import {
   sanitizeContextSnapshot,
   sanitizeInspection,
 } from '../privacy/redaction';
-import {createOccurredAt} from '../state/eventLog';
+import {createOccurredAt} from '../timeline/eventLog';
 import type {ObservationEngineInput, ObservationRun} from './types';
 import {
   OBSERVATION_PROMPT_VERSION,

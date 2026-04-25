@@ -1,1543 +1,840 @@
-import React, {useEffect, useRef, useState} from 'react';
-import {
-  Image,
-  Pressable,
-  ScrollView,
-  StyleSheet,
-  Text,
-  TextInput,
-  View,
-} from 'react-native';
+import React, {useEffect, useMemo, useState} from 'react';
+import {Pressable, StyleSheet, View} from 'react-native';
+import {Text} from './src/ui/Text';
 
 import {useObservationLab} from './src/observation/useObservationLab';
-import type {
-  WorkflowRecordingRecord,
-  WorkflowReplayRecord,
-  WorkflowStepExpectation,
-  WorkflowStepExpectationKind,
-} from './src/observation/types';
-import {TaskDebugger} from './src/tasks/TaskDebugger';
+import {EMPTY_TIMELINE} from './src/timeline/eventLog';
+import {PLANNER_CONFIG} from './src/planner/config';
+import {computeCostSummary} from './src/planner/costSummary';
+import {
+  getAllPlanCalendarBlocks,
+  getWorklogForDates,
+} from './src/planner/selectors';
+import {CalendarScreen, type CalendarView} from './src/ui/CalendarScreen';
+import {DayDetailPanel} from './src/ui/DayDetailPanel';
+import {SidebarNav, type SidebarKey} from './src/ui/SidebarNav';
+import {ChatScreen} from './src/ui/screens/ChatScreen';
+import {InsightsScreen} from './src/ui/screens/InsightsScreen';
+import {SettingsScreen} from './src/ui/screens/SettingsScreen';
+import {TodayScreen} from './src/ui/screens/TodayScreen';
 
-type SectionProps = {
-  title: string;
-  subtitle?: string;
-  children: React.ReactNode;
-};
-
-type ActionButtonProps = {
-  label: string;
-  onPress: () => void;
-  disabled?: boolean;
-  tone?: 'primary' | 'secondary' | 'danger';
-  testID?: string;
-};
-
-type LabelValueProps = {
-  label: string;
-  value: string;
-};
-
-type ScoreSelectorProps = {
-  label: string;
-  value: number | null;
-  onChange: (value: number) => void;
-};
-
-function Section({title, subtitle, children}: SectionProps) {
-  return (
-    <View style={styles.section}>
-      <Text style={styles.sectionTitle}>{title}</Text>
-      {subtitle != null ? <Text style={styles.sectionSubtitle}>{subtitle}</Text> : null}
-      {children}
-    </View>
-  );
+function pad(value: number): string {
+  return String(value).padStart(2, '0');
 }
 
-function ActionButton({
-  label,
-  onPress,
-  disabled = false,
-  tone = 'primary',
-  testID,
-}: ActionButtonProps) {
-  return (
-    <Pressable
-      accessibilityRole="button"
-      disabled={disabled}
-      onPress={onPress}
-      style={({pressed}) => [
-        styles.button,
-        tone === 'secondary' ? styles.buttonSecondary : null,
-        tone === 'danger' ? styles.buttonDanger : null,
-        disabled ? styles.buttonDisabled : null,
-        pressed && !disabled ? styles.buttonPressed : null,
-      ]}
-      testID={testID}>
-      <Text
-        style={[
-          styles.buttonLabel,
-          tone === 'secondary' ? styles.buttonLabelSecondary : null,
-          tone === 'danger' ? styles.buttonLabelDanger : null,
-        ]}>
-        {label}
-      </Text>
-    </Pressable>
-  );
+function toDateIso(date: Date): string {
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
 }
 
-function LabelValue({label, value}: LabelValueProps) {
-  return (
-    <View style={styles.labelValueRow}>
-      <Text style={styles.labelValueLabel}>{label}</Text>
-      <Text style={styles.labelValueValue}>{value}</Text>
-    </View>
-  );
+function getMondayStart(date: Date): Date {
+  const result = new Date(date);
+  const dayOfWeek = (result.getDay() + 6) % 7;
+  result.setDate(result.getDate() - dayOfWeek);
+  return result;
 }
 
-function ScoreSelector({label, value, onChange}: ScoreSelectorProps) {
-  return (
-    <View style={styles.scoreRow}>
-      <Text style={styles.scoreLabel}>{label}</Text>
-      <View style={styles.scoreButtons}>
-        {[1, 2, 3, 4, 5].map(score => (
-          <Pressable
-            key={score}
-            onPress={() => onChange(score)}
-            style={[
-              styles.scoreButton,
-              value === score ? styles.scoreButtonActive : null,
-            ]}>
-            <Text
-              style={[
-                styles.scoreButtonLabel,
-                value === score ? styles.scoreButtonLabelActive : null,
-              ]}>
-              {score}
-            </Text>
-          </Pressable>
-        ))}
-      </View>
-    </View>
-  );
-}
-
-function formatTimestamp(value?: string | null): string {
-  if (value == null) {
-    return 'Not set';
+function describeFailureTitle(reason: string): string {
+  switch (reason) {
+    case 'missing_api_key':
+      return 'Gemini API key missing';
+    case 'schema_validation_failed':
+      return "The model returned something we couldn't parse";
+    case 'transient_overload':
+      return 'Gemini is temporarily overloaded';
+    case 'rate_limited':
+      return 'Hit the Gemini rate limit';
+    case 'engine_error':
+    default:
+      return 'Last plan update failed';
   }
-
-  return new Date(value).toLocaleString();
 }
 
-function formatNullable(value?: string | number | null): string {
-  if (value == null || value === '') {
-    return 'Unknown';
-  }
-
-  return String(value);
+function isTransientFailure(reason: string | undefined): boolean {
+  return reason === 'transient_overload' || reason === 'rate_limited';
 }
 
-function averageToLabel(value: number | null): string {
-  return value == null ? 'Not scored' : `${value.toFixed(2)} / 5`;
+function describeAge(ms: number): string {
+  const minutes = Math.round(ms / 60000);
+  if (minutes < 1) return 'just now';
+  if (minutes === 1) return '1 minute ago';
+  if (minutes < 60) return `${minutes} minutes ago`;
+  const hours = Math.round(minutes / 60);
+  if (hours === 1) return '1 hour ago';
+  if (hours < 24) return `${hours} hours ago`;
+  const days = Math.round(hours / 24);
+  return days === 1 ? 'yesterday' : `${days} days ago`;
 }
 
-function formatList(values: string[]): string {
-  return values.length === 0 ? 'None' : values.join(', ');
-}
-
-function formatWorkflowMatch(value: boolean | null | undefined): string {
-  if (value == null) {
-    return 'Not labeled';
-  }
-
-  return value ? 'Matched' : 'Mismatched';
-}
-
-type WorkflowStepDraft = Pick<
-  WorkflowStepExpectation,
-  'expectedKind' | 'expectedDecision' | 'note' | 'importance'
->;
-
-function buildWorkflowComparisonExport(args: {
-  recording: WorkflowRecordingRecord;
-  replay: WorkflowReplayRecord;
-  mismatchesOnly?: boolean;
-}): string {
-  const {recording, replay, mismatchesOnly = false} = args;
-  const lines: string[] = [
-    `workflow_label: ${recording.label}`,
-    `workflow_id: ${recording.id}`,
-    `replayed_at: ${replay.replayedAt}`,
-    `summary: matched=${replay.matchedCount}, mismatched=${replay.mismatchedCount}, unlabeled=${replay.unlabeledCount}`,
-    '',
-    'steps:',
-  ];
-
-  recording.steps.forEach((step, index) => {
-    const replayStep =
-      replay.stepResults.find(result => result.stepId === step.id) ?? null;
-    const isMismatch = replayStep?.matchedExpectation === false;
-
-    if (mismatchesOnly && !isMismatch) {
-      return;
-    }
-
-    lines.push(`- step_index: ${index + 1}`);
-    lines.push(`  step_label: ${step.label}`);
-    lines.push(`  expected_kind: ${step.expectation.expectedKind ?? 'none'}`);
-    lines.push(
-      `  expected_decision: ${step.expectation.expectedDecision ?? 'none'}`,
-    );
-    lines.push(
-      `  expectation_note: ${step.expectation.note.trim() || 'none'}`,
-    );
-    lines.push(
-      `  replay_decision: ${replayStep?.decision ?? 'not_replayed'}`,
-    );
-    lines.push(`  replay_mode: ${replayStep?.decisionMode ?? 'unknown'}`);
-    lines.push(
-      `  match_status: ${
-        replayStep == null
-          ? 'not_replayed'
-          : replayStep.matchedExpectation == null
-            ? 'unlabeled'
-            : replayStep.matchedExpectation
-              ? 'matched'
-              : 'mismatched'
-      }`,
-    );
-    lines.push(
-      `  mismatch_reason: ${replayStep?.mismatchReason ?? 'none'}`,
-    );
-    lines.push('');
+function describeAbsoluteTime(iso: string): string {
+  return new Date(iso).toLocaleString([], {
+    month: 'short',
+    day: 'numeric',
+    hour: 'numeric',
+    minute: '2-digit',
   });
+}
 
-  if (mismatchesOnly && replay.mismatchedCount === 0) {
-    lines.push('- none');
+function describeFailureHint(reason: string): string {
+  switch (reason) {
+    case 'missing_api_key':
+      return 'Set GEMINI_API_KEY in the .env file and relaunch the app.';
+    case 'schema_validation_failed':
+      return 'Flow will keep trying every 2 minutes. If it persists, the model may be rate-limited or returning malformed JSON.';
+    case 'transient_overload':
+      return 'Google saw a usage spike. Your previous plan is still in place. Flow will retry automatically in a couple of minutes.';
+    case 'rate_limited':
+      return "You've hit a per-minute quota. Your previous plan is still in place. Flow will retry automatically once the cooldown clears.";
+    case 'engine_error':
+    default:
+      return 'Flow will retry on the next tick. If the message mentions a model name, check that the model is available on your API key.';
   }
+}
 
-  return lines.join('\n').trim();
+function buildMonthDateIsos(year: number, month: number): string[] {
+  const first = new Date(year, month, 1);
+  const start = getMondayStart(first);
+  const dates: string[] = [];
+  const cursor = new Date(start);
+  for (let i = 0; i < 42; i += 1) {
+    dates.push(toDateIso(cursor));
+    cursor.setDate(cursor.getDate() + 1);
+  }
+  return dates;
+}
+
+function parseIsoParts(dateIso: string): {year: number; month: number; day: number} {
+  const [y, m, d] = dateIso.split('-').map(Number);
+  return {year: y ?? 1970, month: (m ?? 1) - 1, day: d ?? 1};
+}
+
+function addDaysIsoPure(dateIso: string, days: number): string {
+  const {year, month, day} = parseIsoParts(dateIso);
+  const dt = new Date(year, month, day + days, 0, 0, 0, 0);
+  return toDateIso(dt);
+}
+
+function buildVisibleDateIsos(view: CalendarView, anchorIso: string): string[] {
+  if (view === 'month') {
+    const {year, month} = parseIsoParts(anchorIso);
+    return buildMonthDateIsos(year, month);
+  }
+  if (view === 'week') {
+    const anchorDate = new Date(`${anchorIso}T00:00:00`);
+    const mondayStart = getMondayStart(anchorDate);
+    const dates: string[] = [];
+    // Include the full surrounding 3-week range so that week navigation can
+    // peek at neighbouring data instantly without a refetch.
+    const cursor = new Date(mondayStart);
+    cursor.setDate(cursor.getDate() - 7);
+    for (let i = 0; i < 21; i += 1) {
+      dates.push(toDateIso(cursor));
+      cursor.setDate(cursor.getDate() + 1);
+    }
+    return dates;
+  }
+  // day view: include ±3 days around the anchor.
+  const dates: string[] = [];
+  for (let delta = -3; delta <= 3; delta += 1) {
+    dates.push(addDaysIsoPure(anchorIso, delta));
+  }
+  return dates;
 }
 
 function App() {
   const {
     hydrationStatus,
-    monitoringEnabled,
     permissions,
-    latestInspection,
-    latestCapturePreview,
-    actionFeedback,
     surfaceErrorMessage,
-    currentContext,
-    latestObservationRun,
-    observeLatestCapture,
-    observationBusy,
-    fixtures,
-    fixturesDirectoryPath,
-    selectedFixtureId,
-    setSelectedFixtureId,
-    selectedFixture,
-    fixtureLabelDraft,
-    setFixtureLabelDraft,
-    saveLatestCaptureAsFixture,
-    runFixtureObservation,
-    runAllFixtures,
-    deleteSelectedFixture,
-    fixtureBusy,
-    batchBusy,
-    ratingDraft,
-    setRatingDraft,
-    saveSelectedFixtureRating,
-    fixtureSummary,
-    workflowRecordings,
-    workflowRecordingsDirectoryPath,
-    selectedWorkflowRecordingId,
-    setSelectedWorkflowRecordingId,
-    selectedWorkflowRecording,
-    activeWorkflowRecording,
-    workflowLabelDraft,
-    setWorkflowLabelDraft,
-    workflowDescriptionDraft,
-    setWorkflowDescriptionDraft,
-    workflowBusy,
-    workflowReplayBusy,
-    startWorkflowRecording,
-    stopWorkflowRecording,
-    recordWorkflowStepNow,
-    saveWorkflowStepExpectation,
-    replaySelectedWorkflowRecording,
-    deleteSelectedWorkflowRecording,
-    labFeedback,
-    currentPrimaryTaskSegment,
-    currentTaskLineage,
-    currentSideBranchSegment,
-    recentTaskDecisions,
+    storagePath,
     timeline,
-    taskDecisionCount,
-    lastTaskDecisionAt,
-    pendingTaskObservations,
-    taskLineages,
-    taskMetrics,
     continuousModeState,
-    currentSessionId,
-    applyUserTaskCorrection,
+    plannerRuntimeState,
+    runPlannerRevisionNow,
     startSession,
     stopSession,
-    runTaskReconciliation,
     promptForAccessibility,
     requestScreenCapturePermission,
-    runCaptureInspection,
-    runCaptureNow,
+    selectedWorklogDateIso,
+    setSelectedWorklogDateIso,
+    selectedWorklogBlockId,
+    setSelectedWorklogBlockId,
+    worklogTimezone,
+    orphanedSession,
+    closeOrphanedSession,
+    resumeSession,
+    getCapturePreview,
+    capturePreviewCount,
+    lastPersistDurationMs,
+    lastPersistBytes,
+    eventLog,
+    updateBlockNotes,
   } = useObservationLab();
 
-  const capturePreviewUri = latestCapturePreview?.dataUri ?? null;
-  const selectedFixturePreviewUri =
-    selectedFixture != null
-      ? `data:${selectedFixture.imageMimeType};base64,${selectedFixture.imageBase64}`
-      : null;
-  const controlsDisabled = hydrationStatus !== 'ready';
-  const latestObservationJson =
-    latestObservationRun != null
-      ? JSON.stringify(latestObservationRun.observation, null, 2)
-      : null;
-  const selectedFixtureObservationJson =
-    selectedFixture?.lastRun != null
-      ? JSON.stringify(selectedFixture.lastRun.observation, null, 2)
-      : null;
-  const selectedWorkflowReplay = selectedWorkflowRecording?.lastReplay ?? null;
-  const selectedWorkflowMismatchExport =
-    selectedWorkflowRecording != null && selectedWorkflowReplay != null
-      ? buildWorkflowComparisonExport({
-          recording: selectedWorkflowRecording,
-          replay: selectedWorkflowReplay,
-          mismatchesOnly: true,
-        })
-      : null;
-  const selectedWorkflowFullExport =
-    selectedWorkflowRecording != null && selectedWorkflowReplay != null
-      ? buildWorkflowComparisonExport({
-          recording: selectedWorkflowRecording,
-          replay: selectedWorkflowReplay,
-        })
-      : null;
-  const [workflowStepDrafts, setWorkflowStepDrafts] = useState<
-    Record<string, WorkflowStepDraft>
-  >({});
-  const workflowStepAutosaveTimersRef = useRef<
-    Record<string, ReturnType<typeof setTimeout>>
-  >({});
+  const [activeNav, setActiveNav] = useState<SidebarKey>('calendar');
 
-  useEffect(() => {
-    return () => {
-      for (const timerId of Object.values(workflowStepAutosaveTimersRef.current)) {
-        clearTimeout(timerId);
-      }
-      workflowStepAutosaveTimersRef.current = {};
-    };
-  }, []);
+  const today = useMemo(() => toDateIso(new Date()), []);
+  const [calendarView, setCalendarView] = useState<CalendarView>('month');
+  const [calendarAnchorIso, setCalendarAnchorIso] = useState<string>(
+    () => selectedWorklogDateIso,
+  );
 
-  useEffect(() => {
-    if (selectedWorkflowRecording == null) {
-      setWorkflowStepDrafts({});
-      return;
-    }
+  const visibleDateIsos = useMemo(
+    () => buildVisibleDateIsos(calendarView, calendarAnchorIso),
+    [calendarView, calendarAnchorIso],
+  );
 
-    setWorkflowStepDrafts(previousDrafts => {
-      const nextDrafts: Record<string, WorkflowStepDraft> = {};
+  // The only thing any of these selectors actually reads off `timeline` is
+  // `planSnapshots`. Key memos on that alone so a capture-heavy second
+  // doesn't bust the month/today/cost caches every time.
+  const planSnapshots = timeline.planSnapshots;
 
-      for (const step of selectedWorkflowRecording.steps) {
-        nextDrafts[step.id] = previousDrafts[step.id] ?? {
-          expectedKind: step.expectation.expectedKind,
-          expectedDecision: step.expectation.expectedDecision,
-          note: step.expectation.note,
-          importance: step.expectation.importance,
-        };
-      }
+  const blocksByDate = useMemo(
+    () =>
+      getWorklogForDates(
+        {...EMPTY_TIMELINE, planSnapshots},
+        visibleDateIsos,
+        worklogTimezone,
+      ),
+    [planSnapshots, visibleDateIsos, worklogTimezone],
+  );
 
-      return nextDrafts;
-    });
-  }, [selectedWorkflowRecording?.id, selectedWorkflowRecording?.steps.length]);
+  const allBlocks = useMemo(
+    () => getAllPlanCalendarBlocks({...EMPTY_TIMELINE, planSnapshots}),
+    [planSnapshots],
+  );
 
-  function getWorkflowStepDraft(
-    stepId: string,
-    fallbackExpectation: WorkflowStepExpectation,
-  ): WorkflowStepDraft {
-    return (
-      workflowStepDrafts[stepId] ?? {
-        expectedKind: fallbackExpectation.expectedKind,
-        expectedDecision: fallbackExpectation.expectedDecision,
-        note: fallbackExpectation.note,
-        importance: fallbackExpectation.importance,
-      }
+  const costSummary = useMemo(
+    () => computeCostSummary({...EMPTY_TIMELINE, planSnapshots}),
+    [planSnapshots],
+  );
+
+  const todaysBlocks = useMemo(
+    () =>
+      getWorklogForDates(
+        {...EMPTY_TIMELINE, planSnapshots},
+        [today],
+        worklogTimezone,
+      )[today] ?? [],
+    [planSnapshots, today, worklogTimezone],
+  );
+
+  const selectedDayBlocks = blocksByDate[selectedWorklogDateIso] ?? [];
+  const selectedBlock = useMemo(() => {
+    if (selectedWorklogBlockId == null) return null;
+    const fromDay = selectedDayBlocks.find(
+      block => block.id === selectedWorklogBlockId,
     );
-  }
+    if (fromDay != null) return fromDay;
+    return (
+      allBlocks.find(block => block.id === selectedWorklogBlockId) ?? null
+    );
+  }, [selectedDayBlocks, allBlocks, selectedWorklogBlockId]);
 
-  function persistWorkflowStepDraft(
-    recordingId: string,
-    stepId: string,
-    draft: WorkflowStepDraft,
-  ) {
-    saveWorkflowStepExpectation({
-      recordingId,
-      stepId,
-      expectation: {
-        expectedKind: draft.expectedKind,
-        expectedDecision: draft.expectedDecision,
-        note: draft.note,
-        importance: draft.importance,
-        labeledAt: null,
-      },
-    }).catch(() => {});
-  }
-
-  function scheduleWorkflowStepAutosave(
-    recordingId: string,
-    stepId: string,
-    draft: WorkflowStepDraft,
-  ) {
-    const existingTimer = workflowStepAutosaveTimersRef.current[stepId];
-
-    if (existingTimer != null) {
-      clearTimeout(existingTimer);
-    }
-
-    workflowStepAutosaveTimersRef.current[stepId] = setTimeout(() => {
-      persistWorkflowStepDraft(recordingId, stepId, draft);
-      delete workflowStepAutosaveTimersRef.current[stepId];
-    }, 500);
-  }
-
-  function applyMergeCorrection() {
-    if (currentTaskLineage == null) {
+  useEffect(() => {
+    if (selectedDayBlocks.length === 0) {
+      if (
+        selectedWorklogBlockId != null &&
+        !allBlocks.some(block => block.id === selectedWorklogBlockId)
+      ) {
+        setSelectedWorklogBlockId(null);
+      }
       return;
     }
+    const stillExists = selectedDayBlocks.some(
+      block => block.id === selectedWorklogBlockId,
+    );
+    if (!stillExists) {
+      setSelectedWorklogBlockId(selectedDayBlocks[0].id);
+    }
+  }, [
+    selectedDayBlocks,
+    selectedWorklogBlockId,
+    allBlocks,
+    setSelectedWorklogBlockId,
+  ]);
 
-    applyUserTaskCorrection({
-      id: `merge_${currentTaskLineage.id}`,
-      type: 'merge_confirmed',
-      segmentIds: currentTaskLineage.segmentIds,
-      lineageIds: [currentTaskLineage.id],
-      note: 'User confirmed these segments belong together.',
-    });
+  const hasSession = timeline.currentSessionId != null;
+  const permissionsReady =
+    permissions.accessibilityTrusted && permissions.captureAccessGranted;
+  const controlsDisabled = hydrationStatus !== 'ready';
+
+  const replanInFlight = plannerRuntimeState?.inFlight === true;
+  const replanDisabled =
+    controlsDisabled || replanInFlight || !hasSession;
+  const lastReplanAt = plannerRuntimeState?.lastRunAt ?? null;
+  const nextReplanAt = useMemo(() => {
+    if (!hasSession || lastReplanAt == null) return null;
+    const next =
+      Date.parse(lastReplanAt) +
+      (plannerRuntimeState?.intervalMs ??
+        PLANNER_CONFIG.plannerRevisionIntervalMs);
+    return new Date(next).toISOString();
+  }, [hasSession, lastReplanAt, plannerRuntimeState?.intervalMs]);
+
+  const recordingStatusText = hasSession
+    ? continuousModeState.currentMode === 'paused'
+      ? 'Paused'
+      : 'Capturing your work'
+    : permissionsReady
+      ? 'Click to start a session'
+      : 'Grant permissions first';
+
+  const recordingHint = (() => {
+    if (replanInFlight) return 'Generating a fresh plan…';
+    if (plannerRuntimeState?.lastFailure != null) {
+      if (
+        isTransientFailure(
+          plannerRuntimeState.lastFailure.reason,
+        )
+      ) {
+        return 'Update delayed — model is busy';
+      }
+      return 'Last plan failed — see banner';
+    }
+    if (lastReplanAt != null) {
+      const time = new Date(lastReplanAt).toLocaleTimeString([], {
+        hour: 'numeric',
+        minute: '2-digit',
+      });
+      return `Last plan at ${time}`;
+    }
+    return 'Click to stop';
+  })();
+
+  function handleStartSession() {
+    if (!permissionsReady) return;
+    startSession().catch(() => {});
   }
 
-  function applySplitCorrection() {
-    if (currentPrimaryTaskSegment == null || currentTaskLineage == null) {
+  function handleStopSession() {
+    stopSession().catch(() => {});
+  }
+
+  function handleReplanNow() {
+    runPlannerRevisionNow?.({cause: 'manual', force: true}).catch(() => {});
+  }
+
+  function goToToday() {
+    const nowIso = toDateIso(new Date());
+    setCalendarAnchorIso(nowIso);
+    setSelectedWorklogDateIso(nowIso);
+    const firstBlockId = todaysBlocks[0]?.id ?? null;
+    setSelectedWorklogBlockId(firstBlockId);
+  }
+
+  function handleCalendarSelectToday() {
+    goToToday();
+  }
+
+  function handleChangeAnchor(anchorIso: string) {
+    setCalendarAnchorIso(anchorIso);
+    // In week/day view the anchor effectively is the selected day, so keep
+    // the selected day in sync to avoid a stale detail panel.
+    if (calendarView !== 'month') {
+      setSelectedWorklogDateIso(anchorIso);
+      const dayBlocks = blocksByDate[anchorIso] ?? [];
+      setSelectedWorklogBlockId(dayBlocks[0]?.id ?? null);
+    }
+  }
+
+  function handleChangeView(nextView: CalendarView) {
+    setCalendarView(nextView);
+    if (nextView !== 'month') {
+      // Anchor follows the currently selected day so the hour grids open on
+      // whatever day the user was focused on.
+      setCalendarAnchorIso(selectedWorklogDateIso);
+    }
+  }
+
+  function handleSelectDay(dateIso: string) {
+    setSelectedWorklogDateIso(dateIso);
+    setCalendarAnchorIso(dateIso);
+    const dayBlocks = blocksByDate[dateIso] ?? [];
+    setSelectedWorklogBlockId(dayBlocks[0]?.id ?? null);
+  }
+
+  function handleNavSelect(key: SidebarKey) {
+    if (key === 'today') {
+      goToToday();
+      setActiveNav('today');
       return;
     }
-
-    applyUserTaskCorrection({
-      id: `split_${currentPrimaryTaskSegment.id}`,
-      type: 'split_confirmed',
-      segmentIds: [currentPrimaryTaskSegment.id],
-      lineageIds: [currentTaskLineage.id],
-      note: 'User confirmed this should remain a distinct segment.',
-    });
+    setActiveNav(key);
   }
 
-  function applyResumeCorrection() {
-    if (currentTaskLineage == null) {
-      return;
-    }
+  const calendarPrimaryAction = hasSession
+    ? {
+        label: replanInFlight ? 'Planning…' : 'Replan now',
+        onPress: handleReplanNow,
+        disabled: controlsDisabled || replanInFlight,
+      }
+    : {
+        label: 'Start session',
+        onPress: handleStartSession,
+        disabled: controlsDisabled || !permissionsReady,
+      };
 
-    applyUserTaskCorrection({
-      id: `resume_${currentTaskLineage.id}`,
-      type: 'resume_correction_applied',
-      segmentIds: currentTaskLineage.segmentIds,
-      lineageIds: [currentTaskLineage.id],
-      note: 'User confirmed the current work resumes an earlier lineage.',
-    });
-  }
+  const calendarSecondaryAction = hasSession
+    ? {
+        label: 'Stop',
+        onPress: handleStopSession,
+        disabled: controlsDisabled,
+      }
+    : undefined;
+
+  const showDetailPanel =
+    activeNav === 'calendar' || activeNav === 'today';
 
   return (
-    <ScrollView contentContainerStyle={styles.screen}>
-      <Section
-        title="Observation Lab"
-        subtitle="Focused manual test surface for capture, strict JSON observations, and fixture review.">
-        <Text style={styles.heroTitle} testID="app-running">
-          App running
-        </Text>
-        <Text style={styles.heroSubtitle}>
-          {monitoringEnabled
-            ? 'Passive context monitoring is on.'
-            : 'Passive context monitoring is still starting.'}
-        </Text>
-        <LabelValue
-          label="Hydration"
-          value={hydrationStatus === 'ready' ? 'Ready' : hydrationStatus}
-        />
-        <LabelValue
-          label="Current App"
-          value={formatNullable(currentContext?.appName)}
-        />
-        <LabelValue
-          label="Current Window"
-          value={formatNullable(currentContext?.windowTitle)}
-        />
-        <LabelValue
-          label="Context Source"
-          value={currentContext?.source === 'window' ? 'Precise window' : 'App only'}
-        />
-        <View style={styles.buttonRow}>
-          <ActionButton
-            label="Start Session"
-            onPress={startSession}
-            disabled={controlsDisabled}
-          />
-          <ActionButton
-            label="Stop Session"
-            onPress={stopSession}
-            disabled={controlsDisabled}
-            tone="secondary"
-          />
-          <ActionButton
-            label="Reconcile Tasks"
-            onPress={runTaskReconciliation}
-            disabled={controlsDisabled}
-            tone="secondary"
-          />
-        </View>
-      </Section>
-
-      <Section
-        title="Continuous Session"
-        subtitle="Continuous capture and automatic observation generation follow the active session.">
-        <LabelValue
-          label="Mode"
-          value={continuousModeState.currentMode}
-        />
-        <LabelValue
-          label="Auto Observe"
-          value={continuousModeState.autoObserveEnabled ? 'On' : 'Off'}
-        />
-        <LabelValue
-          label="Queue Length"
-          value={String(continuousModeState.observationQueueLength)}
-        />
-        <LabelValue
-          label="Observation In Flight"
-          value={continuousModeState.observationInFlight ? 'Yes' : 'No'}
-        />
-        <LabelValue
-          label="Last Observed At"
-          value={formatTimestamp(continuousModeState.lastObservedAt)}
-        />
-        <LabelValue
-          label="Last Observation Decision"
-          value={formatNullable(continuousModeState.lastObservationDecision)}
-        />
-        <LabelValue
-          label="Consecutive Failures"
-          value={String(continuousModeState.consecutiveFailureCount)}
-        />
-        <Text style={styles.fieldHelp}>
-          {continuousModeState.continuousStatusMessage}
-        </Text>
-        {currentSessionId == null ? (
-          <Text style={styles.fieldHelp}>
-            Start a session to begin continuous capture and automatic observations.
-          </Text>
-        ) : null}
-      </Section>
-
-      {actionFeedback != null ? (
-        <View style={[styles.feedbackCard, styles.feedbackNeutral]}>
-          <Text style={styles.feedbackTitle}>Capture Status</Text>
-          <Text style={styles.feedbackText}>{actionFeedback.message}</Text>
-        </View>
-      ) : null}
-
-      {labFeedback != null ? (
-        <View
-          style={[
-            styles.feedbackCard,
-            labFeedback.tone === 'success'
-              ? styles.feedbackSuccess
-              : labFeedback.tone === 'warning'
-                ? styles.feedbackWarning
-                : labFeedback.tone === 'error'
-                  ? styles.feedbackError
-                  : styles.feedbackNeutral,
-          ]}>
-          <Text style={styles.feedbackTitle}>Observation Status</Text>
-          <Text style={styles.feedbackText}>{labFeedback.message}</Text>
-        </View>
-      ) : null}
-
-      {surfaceErrorMessage != null ? (
-        <View style={[styles.feedbackCard, styles.feedbackError]}>
-          <Text style={styles.feedbackTitle}>Error</Text>
-          <Text style={styles.feedbackText}>{surfaceErrorMessage}</Text>
-        </View>
-      ) : null}
-
-      <Section
-        title="Permissions"
-        subtitle="Make sure precise context and screen capture are actually available before judging model quality.">
-        <LabelValue
-          label="Accessibility"
-          value={permissions.accessibilityTrusted ? 'Granted' : 'Not granted'}
-        />
-        <LabelValue
-          label="Screen Recording"
-          value={permissions.captureAccessGranted ? 'Granted' : 'Not granted'}
-        />
-        <LabelValue
-          label="Running Bundle ID"
-          value={formatNullable(permissions.hostBundleIdentifier)}
-        />
-        <LabelValue
-          label="Running App Path"
-          value={formatNullable(permissions.hostBundlePath)}
-        />
-        <Text style={styles.fieldHelp}>
-          `Inspect Capture Target` only works after `Screen Recording` shows
-          `Granted`. If you just allowed it in System Settings, relaunch the app
-          once before testing again.
-        </Text>
-        <View style={styles.buttonRow}>
-          <ActionButton
-            label="Prompt Accessibility"
-            onPress={promptForAccessibility}
-            disabled={controlsDisabled}
-          />
-        </View>
-        <View style={styles.buttonRow}>
-          <ActionButton
-            label="Request Screen Recording"
-            onPress={requestScreenCapturePermission}
-            disabled={controlsDisabled}
-          />
-        </View>
-      </Section>
-
-      <Section
-        title="Live Capture"
-        subtitle="Use these controls to verify target resolution, grab a screenshot, and feed the real observation engine.">
-        <View style={styles.buttonRow}>
-          <ActionButton
-            label="Inspect Capture Target"
-            onPress={runCaptureInspection}
-            disabled={controlsDisabled}
-            testID="inspect-capture-button"
-          />
-          <ActionButton
-            label="Capture Now"
-            onPress={runCaptureNow}
-            disabled={controlsDisabled}
-            testID="capture-now-button"
-          />
-        </View>
-        <LabelValue
-          label="Chosen Target"
-          value={formatNullable(latestInspection?.chosenTargetType)}
-        />
-        <LabelValue
-          label="Resolver Confidence"
-          value={
-            latestInspection != null
-              ? latestInspection.confidence.toFixed(2)
-              : 'Not inspected'
-          }
-        />
-        <LabelValue
-          label="Captured At"
-          value={formatTimestamp(latestCapturePreview?.metadata.capturedAt)}
-        />
-        <LabelValue
-          label="Frame Hash"
-          value={formatNullable(latestCapturePreview?.metadata.frameHash)}
-        />
-        <LabelValue
-          label="Resolver Note"
-          value={formatNullable(latestInspection?.fallbackReason)}
-        />
-        {capturePreviewUri != null ? (
-          <Image source={{uri: capturePreviewUri}} style={styles.previewImage} />
-        ) : (
-          <Text style={styles.emptyState}>
-            Capture a screenshot to preview what the observation engine will see.
-          </Text>
-        )}
-      </Section>
-
-      <Section
-        title="Observation Engine"
-        subtitle="This is the new Stage 8 path: screenshot plus metadata goes to a real vision model and must come back as strict JSON.">
-        <View style={styles.buttonRow}>
-          <ActionButton
-            label={observationBusy ? 'Observing…' : 'Observe Last Capture'}
-            onPress={() => {
-              observeLatestCapture().catch(() => {});
-            }}
-            disabled={observationBusy || controlsDisabled}
-            testID="observe-last-capture-button"
-          />
-        </View>
-        {latestObservationRun != null ? (
-          <>
-            <LabelValue label="Model" value={latestObservationRun.model} />
-            <LabelValue
-              label="Latency"
-              value={`${latestObservationRun.durationMs} ms`}
-            />
-            <Text style={styles.jsonLabel}>Strict JSON Output</Text>
-            <Text style={styles.jsonBlock} selectable>
-              {latestObservationJson}
-            </Text>
-          </>
-        ) : (
-          <Text style={styles.emptyState}>
-            No real observation has run yet.
-          </Text>
-        )}
-      </Section>
-
-      <Section
-        title="Task Debugger"
-        subtitle="Inspect the live task engine state, pending observations, and recent decisions.">
-        <TaskDebugger
-          currentPrimaryTaskSegment={currentPrimaryTaskSegment}
-          currentTaskLineage={currentTaskLineage}
-          currentSideBranchSegment={currentSideBranchSegment}
-          recentTaskDecisions={recentTaskDecisions}
-          observationsById={timeline.observationsById}
-          taskDecisionCount={taskDecisionCount}
-          lastTaskDecisionAt={lastTaskDecisionAt}
-          pendingTaskObservations={pendingTaskObservations}
-          taskLineageCount={taskLineages.length}
-          taskMetrics={taskMetrics}
-          styles={{
-            buttonRow: styles.buttonRow,
-            emptyState: styles.emptyState,
-            fixtureList: styles.fixtureList,
-            fixtureRow: styles.fixtureRow,
-            fixtureTitle: styles.fixtureTitle,
-            fixtureMeta: styles.fixtureMeta,
-            fieldHelp: styles.fieldHelp,
-            warningBadge: styles.warningBadge,
-            warningBadgeText: styles.warningBadgeText,
-            taskObservationRow: styles.taskObservationRow,
-            taskObservationImage: styles.taskObservationImage,
-            taskObservationBody: styles.taskObservationBody,
-          }}
-          LabelValue={LabelValue}
-          ActionButton={ActionButton}
-          formatNullable={formatNullable}
-          formatList={formatList}
-          formatTimestamp={formatTimestamp}
-          onMergeConfirm={applyMergeCorrection}
-          onSplitConfirm={applySplitCorrection}
-          onResumeConfirm={applyResumeCorrection}
-          controlsDisabled={controlsDisabled}
-        />
-      </Section>
-
-      <Section
-        title="Workflow Recorder"
-        subtitle="Record real screenshot sequences, label what should happen, and replay them later as a benchmark set.">
-        <TextInput
-          autoCorrect={false}
-          onChangeText={setWorkflowLabelDraft}
-          placeholder="Workflow label"
-          style={styles.input}
-          value={workflowLabelDraft}
-        />
-        <TextInput
-          multiline
-          onChangeText={setWorkflowDescriptionDraft}
-          placeholder="What does this workflow represent?"
-          style={[styles.input, styles.notesInput]}
-          value={workflowDescriptionDraft}
-        />
-        <View style={styles.buttonRow}>
-          <ActionButton
-            label={workflowBusy ? 'Working…' : 'Start Auto Recording'}
-            onPress={() => {
-              startWorkflowRecording('automatic').catch(() => {});
-            }}
-            disabled={workflowBusy || activeWorkflowRecording != null}
-            testID="start-auto-workflow-button"
-          />
-          <ActionButton
-            label={workflowBusy ? 'Working…' : 'Start Manual Recording'}
-            onPress={() => {
-              startWorkflowRecording('manual').catch(() => {});
-            }}
-            disabled={workflowBusy || activeWorkflowRecording != null}
-            tone="secondary"
-            testID="start-manual-workflow-button"
-          />
-          <ActionButton
-            label={workflowBusy ? 'Stopping…' : 'Stop Recording'}
-            onPress={() => {
-              stopWorkflowRecording().catch(() => {});
-            }}
-            disabled={workflowBusy || activeWorkflowRecording == null}
-            tone="secondary"
-          />
-          <ActionButton
-            label={workflowBusy ? 'Capturing…' : 'Capture Step Now'}
-            onPress={() => {
-              recordWorkflowStepNow().catch(() => {});
-            }}
-            disabled={
-              workflowBusy ||
-              activeWorkflowRecording == null ||
-              activeWorkflowRecording.captureMode !== 'manual'
-            }
-            testID="capture-workflow-step-button"
-          />
-        </View>
-        <LabelValue
-          label="Active Workflow"
-          value={formatNullable(activeWorkflowRecording?.label)}
-        />
-        <LabelValue
-          label="Capture Mode"
-          value={formatNullable(activeWorkflowRecording?.captureMode)}
-        />
-        <LabelValue
-          label="Recorded Steps"
-          value={String(activeWorkflowRecording?.steps.length ?? 0)}
-        />
-        <LabelValue
-          label="Workflows Path"
-          value={formatNullable(workflowRecordingsDirectoryPath)}
-        />
-        {workflowRecordings.length === 0 ? (
-          <Text style={styles.emptyState}>
-            No workflow recordings yet. Start recording to build your benchmark set.
-          </Text>
-        ) : (
-          <View style={styles.fixtureList}>
-            {workflowRecordings.map(recording => {
-              const isSelected = recording.id === selectedWorkflowRecordingId;
-
-              return (
-                <Pressable
-                  key={recording.id}
-                  onPress={() => setSelectedWorkflowRecordingId(recording.id)}
-                  style={[
-                    styles.fixtureRow,
-                    isSelected ? styles.fixtureRowSelected : null,
-                  ]}>
-                  <Text style={styles.fixtureTitle}>{recording.label}</Text>
-                  <Text style={styles.fixtureMeta}>
-                    {formatTimestamp(recording.createdAt)}
-                  </Text>
-                  <Text style={styles.fixtureMeta}>
-                    {recording.status} · {recording.captureMode} · {recording.steps.length} steps
-                  </Text>
-                </Pressable>
-              );
-            })}
-          </View>
-        )}
-      </Section>
-
-      <Section
-        title="Fixture Set"
-        subtitle="Save captures that represent real work, rerun them later, and score whether the observation is useful enough for future clustering.">
-        <TextInput
-          autoCorrect={false}
-          onChangeText={setFixtureLabelDraft}
-          placeholder="Fixture label (optional)"
-          style={styles.input}
-          value={fixtureLabelDraft}
-        />
-        <View style={styles.buttonRow}>
-          <ActionButton
-            label={fixtureBusy ? 'Saving…' : 'Save Latest Capture As Fixture'}
-            onPress={() => {
-              saveLatestCaptureAsFixture().catch(() => {});
-            }}
-            disabled={fixtureBusy || controlsDisabled}
-            testID="save-fixture-button"
-          />
-          <ActionButton
-            label={batchBusy ? 'Running…' : 'Run All Fixtures'}
-            onPress={() => {
-              runAllFixtures().catch(() => {});
-            }}
-            disabled={batchBusy || fixtures.length === 0}
-            tone="secondary"
-          />
-        </View>
-        <LabelValue
-          label="Fixture Count"
-          value={String(fixtures.length)}
-        />
-        <LabelValue
-          label="Fixtures Path"
-          value={formatNullable(fixturesDirectoryPath)}
-        />
-        <LabelValue
-          label="Rated Fixtures"
-          value={String(fixtureSummary.ratedCount)}
-        />
-        <LabelValue
-          label="Avg Usefulness"
-          value={averageToLabel(fixtureSummary.averageUsefulness)}
-        />
-        <LabelValue
-          label="Avg Confidence"
-          value={averageToLabel(
-            fixtureSummary.averageConfidenceCalibration,
-          )}
-        />
-        <LabelValue
-          label="Avg Sensitivity"
-          value={averageToLabel(fixtureSummary.averageSensitivityHandling)}
-        />
-        {fixtures.length === 0 ? (
-          <Text style={styles.emptyState}>
-            No fixtures yet. Capture a real screen and save it.
-          </Text>
-        ) : (
-          <View style={styles.fixtureList}>
-            {fixtures.map(fixture => {
-              const isSelected = fixture.id === selectedFixtureId;
-
-              return (
-                <Pressable
-                  key={fixture.id}
-                  onPress={() => setSelectedFixtureId(fixture.id)}
-                  style={[
-                    styles.fixtureRow,
-                    isSelected ? styles.fixtureRowSelected : null,
-                  ]}>
-                  <Text style={styles.fixtureTitle}>{fixture.label}</Text>
-                  <Text style={styles.fixtureMeta}>
-                    {formatTimestamp(fixture.createdAt)}
-                  </Text>
-                  <Text style={styles.fixtureMeta}>
-                    {fixture.lastRun != null ? 'Observed' : 'Not observed'} ·{' '}
-                    {fixture.rating != null ? 'Scored' : 'Unscored'}
-                  </Text>
-                </Pressable>
-              );
-            })}
-          </View>
-        )}
-      </Section>
-
-      {selectedFixture != null ? (
-        <Section
-          title="Selected Fixture"
-          subtitle="Run the saved screenshot again, then score whether the JSON is useful enough for later task clustering.">
-          <LabelValue label="Label" value={selectedFixture.label} />
-          <LabelValue
-            label="Created"
-            value={formatTimestamp(selectedFixture.createdAt)}
-          />
-          <View style={styles.buttonRow}>
-            <ActionButton
-              label={fixtureBusy ? 'Running…' : 'Run Selected Fixture'}
-              onPress={() => {
-                runFixtureObservation(selectedFixture.id).catch(() => {});
-              }}
-              disabled={fixtureBusy}
-              testID="run-selected-fixture-button"
-            />
-            <ActionButton
-              label="Delete Fixture"
-              onPress={() => {
-                deleteSelectedFixture().catch(() => {});
-              }}
-              disabled={fixtureBusy}
-              tone="danger"
-            />
-          </View>
-          {selectedFixturePreviewUri != null ? (
-            <Image
-              source={{uri: selectedFixturePreviewUri}}
-              style={styles.previewImage}
-            />
-          ) : null}
-          {selectedFixture.lastRun != null ? (
-            <>
-              <LabelValue label="Run Model" value={selectedFixture.lastRun.model} />
-              <LabelValue
-                label="Run Latency"
-                value={`${selectedFixture.lastRun.durationMs} ms`}
-              />
-              <Text style={styles.jsonLabel}>Observed JSON</Text>
-              <Text style={styles.jsonBlock} selectable>
-                {selectedFixtureObservationJson}
+    <View style={styles.shell} testID="app-running">
+      <SidebarNav
+        activeKey={activeNav}
+        onSelect={handleNavSelect}
+        recording={hasSession}
+        recordingStatusText={recordingStatusText}
+        recordingHint={recordingHint}
+        onStartPress={handleStartSession}
+        onStopPress={handleStopSession}
+        startDisabled={controlsDisabled || !permissionsReady}
+      />
+      <View style={styles.main}>
+        {orphanedSession != null ? (
+          <View style={styles.recoveryBar}>
+            <View style={styles.recoveryText}>
+              <Text style={styles.recoveryTitle}>
+                Unfinished session from {describeAge(orphanedSession.ageMs)}
               </Text>
-            </>
-          ) : (
-            <Text style={styles.emptyState}>
-              This fixture has not been evaluated yet.
-            </Text>
-          )}
-          <ScoreSelector
-            label="Usefulness"
-            value={ratingDraft.usefulness}
-            onChange={value =>
-              setRatingDraft(previousRating => ({
-                ...previousRating,
-                usefulness: value,
-              }))
-            }
-          />
-          <ScoreSelector
-            label="Confidence"
-            value={ratingDraft.confidenceCalibration}
-            onChange={value =>
-              setRatingDraft(previousRating => ({
-                ...previousRating,
-                confidenceCalibration: value,
-              }))
-            }
-          />
-          <ScoreSelector
-            label="Sensitivity"
-            value={ratingDraft.sensitivityHandling}
-            onChange={value =>
-              setRatingDraft(previousRating => ({
-                ...previousRating,
-                sensitivityHandling: value,
-              }))
-            }
-          />
-          <TextInput
-            multiline
-            onChangeText={value =>
-              setRatingDraft(previousRating => ({
-                ...previousRating,
-                notes: value,
-              }))
-            }
-            placeholder="What was useful, misleading, or sensitive?"
-            style={[styles.input, styles.notesInput]}
-            value={ratingDraft.notes}
-          />
-          <ActionButton
-            label={fixtureBusy ? 'Saving…' : 'Save Scores'}
-            onPress={() => {
-              saveSelectedFixtureRating().catch(() => {});
-            }}
-            disabled={fixtureBusy}
-            tone="secondary"
-            testID="save-fixture-scores-button"
-          />
-        </Section>
-      ) : null}
-
-      {selectedWorkflowRecording != null ? (
-        <Section
-          title="Selected Workflow"
-          subtitle="Replay the workflow against the current pipeline and mark what should have happened for each step.">
-          <LabelValue label="Label" value={selectedWorkflowRecording.label} />
-          <LabelValue
-            label="Status"
-            value={`${selectedWorkflowRecording.status} · ${selectedWorkflowRecording.captureMode}`}
-          />
-          <LabelValue
-            label="Started"
-            value={formatTimestamp(selectedWorkflowRecording.startedAt)}
-          />
-          <LabelValue
-            label="Completed"
-            value={formatTimestamp(selectedWorkflowRecording.completedAt)}
-          />
-          <LabelValue
-            label="Replay Summary"
-            value={
-              selectedWorkflowReplay == null
-                ? 'Not replayed'
-                : `${selectedWorkflowReplay.matchedCount} matched · ${selectedWorkflowReplay.mismatchedCount} mismatched · ${selectedWorkflowReplay.unlabeledCount} unlabeled`
-            }
-          />
-          {selectedWorkflowReplay != null ? (
-            <>
-              <Text style={styles.jsonLabel}>Paste To Chat (Mismatches)</Text>
-              <Text style={styles.fieldHelp}>
-                Click this box, press Cmd+A then Cmd+C, then paste into chat.
+              <Text style={styles.recoveryBody}>
+                Started {describeAbsoluteTime(orphanedSession.startedAt)} · last
+                activity {describeAbsoluteTime(orphanedSession.lastActivityAt)}.
+                Flow isn't capturing right now — resume to continue or close to
+                record this as its final time.
               </Text>
-              <TextInput
-                editable={false}
-                multiline
-                selectTextOnFocus
-                style={[styles.input, styles.codeInput, styles.pasteOutputInput]}
-                testID="workflow-mismatches-export"
-                value={selectedWorkflowMismatchExport ?? ''}
-              />
-              <Text style={styles.jsonLabel}>Paste To Chat (All Steps)</Text>
-              <TextInput
-                editable={false}
-                multiline
-                selectTextOnFocus
-                style={[styles.input, styles.codeInput, styles.pasteOutputInput]}
-                testID="workflow-all-steps-export"
-                value={selectedWorkflowFullExport ?? ''}
-              />
-            </>
-          ) : null}
-          {selectedWorkflowRecording.description.length > 0 ? (
-            <Text style={styles.fieldHelp}>{selectedWorkflowRecording.description}</Text>
-          ) : null}
-          <View style={styles.buttonRow}>
-            <ActionButton
-              label={workflowReplayBusy ? 'Replaying…' : 'Replay Selected Workflow'}
-              onPress={() => {
-                replaySelectedWorkflowRecording().catch(() => {});
-              }}
-              disabled={workflowReplayBusy}
-              testID="replay-selected-workflow-button"
-            />
-            <ActionButton
-              label="Delete Workflow"
-              onPress={() => {
-                deleteSelectedWorkflowRecording().catch(() => {});
-              }}
-              disabled={workflowBusy}
-              tone="danger"
-            />
-          </View>
-          {selectedWorkflowRecording.steps.length === 0 ? (
-            <Text style={styles.emptyState}>
-              No steps have been recorded for this workflow yet.
-            </Text>
-          ) : (
-            <View style={styles.fixtureList}>
-              {selectedWorkflowRecording.steps.map(step => {
-                const replayResult =
-                  selectedWorkflowReplay?.stepResults.find(
-                    result => result.stepId === step.id,
-                  ) ?? null;
-                const stepDraft = getWorkflowStepDraft(step.id, step.expectation);
-
-                function updateStepDraft(nextDraft: WorkflowStepDraft) {
-                  setWorkflowStepDrafts(previousDrafts => ({
-                    ...previousDrafts,
-                    [step.id]: nextDraft,
-                  }));
-                }
-
-                function setStepExpectedKind(expectedKind: WorkflowStepExpectationKind) {
-                  const nextDraft: WorkflowStepDraft = {
-                    ...stepDraft,
-                    expectedKind,
-                  };
-                  updateStepDraft(nextDraft);
-                  persistWorkflowStepDraft(
-                    selectedWorkflowRecording.id,
-                    step.id,
-                    nextDraft,
-                  );
-                }
-
-                return (
-                  <View key={step.id} style={styles.fixtureRow}>
-                    <Text style={styles.fixtureTitle}>{step.label}</Text>
-                    <Text style={styles.fixtureMeta}>
-                      {formatTimestamp(step.recordedAt)}
-                    </Text>
-                    <Text style={styles.fixtureMeta}>
-                      Recorded: {formatNullable(step.recordedTaskDebug?.decision)}
-                    </Text>
-                    <Text style={styles.fixtureMeta}>
-                      Replay: {formatNullable(replayResult?.decision)} ·{' '}
-                      {formatWorkflowMatch(replayResult?.matchedExpectation)}
-                    </Text>
-                    <Text style={styles.fixtureMeta}>
-                      Expected: {formatNullable(stepDraft.expectedKind)} · Exact:{' '}
-                      {formatNullable(stepDraft.expectedDecision)}
-                    </Text>
-                    {replayResult?.mismatchReason != null ? (
-                      <Text style={styles.fieldHelp}>{replayResult.mismatchReason}</Text>
-                    ) : null}
-                    <View style={styles.buttonRow}>
-                      <ActionButton
-                        label="Same Task"
-                        onPress={() => {
-                          setStepExpectedKind('same_task');
-                        }}
-                        disabled={workflowBusy}
-                        tone={
-                          stepDraft.expectedKind === 'same_task'
-                            ? 'primary'
-                            : 'secondary'
-                        }
-                      />
-                      <ActionButton
-                        label="Switch"
-                        onPress={() => {
-                          setStepExpectedKind('switch_task');
-                        }}
-                        disabled={workflowBusy}
-                        tone={
-                          stepDraft.expectedKind === 'switch_task'
-                            ? 'primary'
-                            : 'secondary'
-                        }
-                      />
-                      <ActionButton
-                        label="Resume"
-                        onPress={() => {
-                          setStepExpectedKind('resume_task');
-                        }}
-                        disabled={workflowBusy}
-                        tone={
-                          stepDraft.expectedKind === 'resume_task'
-                            ? 'primary'
-                            : 'secondary'
-                        }
-                      />
-                      <ActionButton
-                        label="Interruption"
-                        onPress={() => {
-                          setStepExpectedKind('temporary_interruption');
-                        }}
-                        disabled={workflowBusy}
-                        tone={
-                          stepDraft.expectedKind === 'temporary_interruption'
-                            ? 'primary'
-                            : 'secondary'
-                        }
-                      />
-                      <ActionButton
-                        label={workflowBusy ? 'Saving…' : 'Save Step Labels'}
-                        onPress={() => {
-                          persistWorkflowStepDraft(
-                            selectedWorkflowRecording.id,
-                            step.id,
-                            stepDraft,
-                          );
-                        }}
-                        disabled={workflowBusy}
-                        tone="secondary"
-                      />
-                    </View>
-                    <TextInput
-                      autoCorrect={false}
-                      onBlur={() => {
-                        persistWorkflowStepDraft(
-                          selectedWorkflowRecording.id,
-                          step.id,
-                          stepDraft,
-                        );
-                      }}
-                      onChangeText={value => {
-                        const nextDraft: WorkflowStepDraft = {
-                          ...stepDraft,
-                          expectedDecision: value,
-                        };
-                        updateStepDraft(nextDraft);
-                        scheduleWorkflowStepAutosave(
-                          selectedWorkflowRecording.id,
-                          step.id,
-                          nextDraft,
-                        );
-                      }}
-                      placeholder="Optional exact engine decision"
-                      style={styles.input}
-                      value={stepDraft.expectedDecision ?? ''}
-                    />
-                    <TextInput
-                      autoCorrect={false}
-                      multiline
-                      onBlur={() => {
-                        persistWorkflowStepDraft(
-                          selectedWorkflowRecording.id,
-                          step.id,
-                          stepDraft,
-                        );
-                      }}
-                      onChangeText={value => {
-                        const nextDraft: WorkflowStepDraft = {
-                          ...stepDraft,
-                          note: value,
-                        };
-                        updateStepDraft(nextDraft);
-                        scheduleWorkflowStepAutosave(
-                          selectedWorkflowRecording.id,
-                          step.id,
-                          nextDraft,
-                        );
-                      }}
-                      placeholder="Why should this behave that way?"
-                      style={[styles.input, styles.notesInput]}
-                      value={stepDraft.note}
-                    />
-                  </View>
-                );
-              })}
             </View>
-          )}
-        </Section>
+            <View style={styles.recoveryActions}>
+              <Pressable
+                onPress={() => closeOrphanedSession?.()}
+                style={({pressed}) => [
+                  styles.recoverySecondary,
+                  pressed ? styles.pressed : null,
+                ]}>
+                <Text style={styles.recoverySecondaryLabel}>Close session</Text>
+              </Pressable>
+              <Pressable
+                onPress={() => resumeSession?.()}
+                disabled={!permissionsReady}
+                style={({pressed}) => [
+                  styles.recoveryPrimary,
+                  !permissionsReady ? styles.recoveryDisabled : null,
+                  pressed && permissionsReady ? styles.pressed : null,
+                ]}>
+                <Text style={styles.recoveryPrimaryLabel}>Resume</Text>
+              </Pressable>
+            </View>
+          </View>
+        ) : null}
+
+        {!permissionsReady ? (
+          <View style={styles.permissionBar}>
+            <View style={styles.permissionText}>
+              <Text style={styles.permissionTitle}>Grant permissions to start</Text>
+              <Text style={styles.permissionBody}>
+                Flow needs screen recording and accessibility to capture your work.
+              </Text>
+            </View>
+            <View style={styles.permissionActions}>
+              {!permissions.accessibilityTrusted ? (
+                <Pressable
+                  onPress={promptForAccessibility}
+                  style={({pressed}) => [
+                    styles.permissionButton,
+                    pressed ? styles.pressed : null,
+                  ]}>
+                  <Text style={styles.permissionButtonLabel}>
+                    Grant accessibility
+                  </Text>
+                </Pressable>
+              ) : null}
+              {!permissions.captureAccessGranted ? (
+                <Pressable
+                  onPress={requestScreenCapturePermission}
+                  style={({pressed}) => [
+                    styles.permissionButton,
+                    pressed ? styles.pressed : null,
+                  ]}>
+                  <Text style={styles.permissionButtonLabel}>
+                    Grant screen recording
+                  </Text>
+                </Pressable>
+              ) : null}
+            </View>
+          </View>
+        ) : null}
+
+        {surfaceErrorMessage != null ? (
+          <View style={styles.errorBar}>
+            <Text style={styles.errorTitle}>Something went wrong</Text>
+            <Text style={styles.errorBody}>{surfaceErrorMessage}</Text>
+          </View>
+        ) : null}
+
+        {plannerRuntimeState?.lastFailure != null ? (
+          <View
+            style={[
+              styles.replanFailureBar,
+              isTransientFailure(plannerRuntimeState.lastFailure.reason)
+                ? styles.replanFailureBarTransient
+                : null,
+            ]}>
+            <View style={styles.replanFailureText}>
+              <Text
+                style={[
+                  styles.replanFailureTitle,
+                  isTransientFailure(
+                    plannerRuntimeState.lastFailure.reason,
+                  )
+                    ? styles.replanFailureTitleTransient
+                    : null,
+                ]}>
+                {describeFailureTitle(
+                  plannerRuntimeState.lastFailure.reason,
+                )}
+              </Text>
+              <Text
+                style={[
+                  styles.replanFailureBody,
+                  isTransientFailure(
+                    plannerRuntimeState.lastFailure.reason,
+                  )
+                    ? styles.replanFailureBodyTransient
+                    : null,
+                ]}
+                selectable>
+                {plannerRuntimeState.lastFailure.message}
+              </Text>
+              <Text
+                style={[
+                  styles.replanFailureHint,
+                  isTransientFailure(
+                    plannerRuntimeState.lastFailure.reason,
+                  )
+                    ? styles.replanFailureHintTransient
+                    : null,
+                ]}>
+                {describeFailureHint(
+                  plannerRuntimeState.lastFailure.reason,
+                )}
+              </Text>
+            </View>
+            <Pressable
+              onPress={handleReplanNow}
+              disabled={replanDisabled}
+              style={({pressed}) => [
+                styles.replanRetryButton,
+                isTransientFailure(
+                  plannerRuntimeState.lastFailure?.reason,
+                )
+                  ? styles.replanRetryButtonTransient
+                  : null,
+                replanDisabled ? styles.replanRetryDisabled : null,
+                pressed && !replanDisabled ? styles.pressed : null,
+              ]}>
+              <Text style={styles.replanRetryLabel}>
+                {replanInFlight ? 'Retrying…' : 'Retry now'}
+              </Text>
+            </Pressable>
+          </View>
+        ) : null}
+
+        {activeNav === 'calendar' ? (
+          <CalendarScreen
+            view={calendarView}
+            onChangeView={handleChangeView}
+            anchorIso={calendarAnchorIso}
+            onChangeAnchor={handleChangeAnchor}
+            today={today}
+            selectedDateIso={selectedWorklogDateIso}
+            selectedBlockId={selectedWorklogBlockId}
+            blocksByDate={blocksByDate}
+            onSelectDay={handleSelectDay}
+            onSelectBlock={setSelectedWorklogBlockId}
+            onGoToToday={handleCalendarSelectToday}
+            primaryAction={calendarPrimaryAction}
+            secondaryAction={calendarSecondaryAction}
+          />
+        ) : null}
+
+        {activeNav === 'today' ? (
+          <TodayScreen
+            todayIso={today}
+            blocks={todaysBlocks}
+            selectedBlockId={selectedWorklogBlockId}
+            onSelectBlock={setSelectedWorklogBlockId}
+            hasSession={hasSession}
+            lastReplanAt={lastReplanAt}
+            nextReplanAt={nextReplanAt}
+            onStartSession={handleStartSession}
+            onStopSession={handleStopSession}
+            onReplanNow={handleReplanNow}
+            startDisabled={controlsDisabled || !permissionsReady}
+            replanDisabled={replanDisabled}
+            replanInFlight={replanInFlight}
+          />
+        ) : null}
+
+        {activeNav === 'chat' ? (
+          <ChatScreen timeline={timeline} timezone={worklogTimezone} />
+        ) : null}
+
+        {activeNav === 'insights' ? (
+          <InsightsScreen allBlocks={allBlocks} />
+        ) : null}
+
+        {activeNav === 'settings' ? (
+          <SettingsScreen
+            permissions={permissions}
+            onPromptAccessibility={promptForAccessibility}
+            onPromptScreenRecording={requestScreenCapturePermission}
+            replanIntervalMs={PLANNER_CONFIG.plannerRevisionIntervalMs}
+            replanWindowMs={PLANNER_CONFIG.plannerRevisionWindowMs}
+            replanMaxObservations={
+              PLANNER_CONFIG.plannerRevisionMaxObservationsInPrompt
+            }
+            lastReplanAt={lastReplanAt}
+            lastReplanBlockCount={plannerRuntimeState?.lastBlockCount ?? 0}
+            lastPlanModel={plannerRuntimeState?.lastPlanModel ?? null}
+            lastFailureMessage={
+              plannerRuntimeState?.lastFailure?.message ?? null
+            }
+            onReplanNow={handleReplanNow}
+            replanInFlight={replanInFlight}
+            replanDisabled={replanDisabled}
+            hasSession={hasSession}
+            storagePath={storagePath}
+            costSummary={costSummary}
+            performance={{
+              eventCount: eventLog.length,
+              observationCount: timeline.observationOrder.length,
+              planCount: timeline.planSnapshots.length,
+              contextSnapshotCount: timeline.contextSnapshotOrder.length,
+              capturePreviewCount: capturePreviewCount ?? 0,
+              lastPersistDurationMs: lastPersistDurationMs ?? null,
+              lastPersistBytes: lastPersistBytes ?? null,
+            }}
+          />
+        ) : null}
+      </View>
+      {showDetailPanel ? (
+        <DayDetailPanel
+          selectedDateIso={selectedWorklogDateIso}
+          dayBlocks={
+            activeNav === 'today' ? todaysBlocks : selectedDayBlocks
+          }
+          selectedBlock={selectedBlock}
+          onSelectBlock={setSelectedWorklogBlockId}
+          observationsById={timeline.observationsById}
+          getCapturePreview={getCapturePreview}
+          userBlockNotes={timeline.userBlockNotes}
+          onUpdateBlockNotes={updateBlockNotes}
+        />
       ) : null}
-    </ScrollView>
+    </View>
   );
 }
 
 const styles = StyleSheet.create({
-  screen: {
-    padding: 24,
-    gap: 16,
-    backgroundColor: '#f6f1e8',
-  },
-  section: {
-    backgroundColor: '#fffaf3',
-    borderRadius: 18,
-    padding: 18,
-    gap: 12,
-    borderWidth: 1,
-    borderColor: '#dfd1be',
-  },
-  sectionTitle: {
-    fontSize: 18,
-    fontWeight: '700',
-    color: '#2d2115',
-  },
-  sectionSubtitle: {
-    fontSize: 13,
-    lineHeight: 19,
-    color: '#6f5b48',
-  },
-  heroTitle: {
-    fontSize: 24,
-    fontWeight: '700',
-    color: '#2d2115',
-  },
-  heroSubtitle: {
-    fontSize: 14,
-    color: '#6f5b48',
-  },
-  feedbackCard: {
-    borderRadius: 16,
-    padding: 16,
-    borderWidth: 1,
-  },
-  feedbackNeutral: {
-    backgroundColor: '#f1e8da',
-    borderColor: '#d7c4a7',
-  },
-  feedbackSuccess: {
-    backgroundColor: '#e8f5ec',
-    borderColor: '#a7d0b2',
-  },
-  feedbackWarning: {
-    backgroundColor: '#fff3d9',
-    borderColor: '#f2c96d',
-  },
-  feedbackError: {
-    backgroundColor: '#ffe3e3',
-    borderColor: '#e89c9c',
-  },
-  feedbackTitle: {
-    fontSize: 13,
-    fontWeight: '700',
-    color: '#2d2115',
-    marginBottom: 4,
-  },
-  feedbackText: {
-    fontSize: 14,
-    lineHeight: 20,
-    color: '#463528',
-  },
-  buttonRow: {
+  shell: {
+    flex: 1,
     flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: 10,
+    backgroundColor: '#f7f3ec',
   },
-  button: {
-    borderRadius: 999,
-    paddingHorizontal: 16,
-    paddingVertical: 11,
-    backgroundColor: '#9a3412',
+  main: {
+    flex: 1,
+    flexDirection: 'column',
   },
-  buttonSecondary: {
-    backgroundColor: '#efe1cc',
+  permissionBar: {
+    marginHorizontal: 24,
+    marginTop: 20,
+    padding: 14,
+    borderRadius: 12,
+    backgroundColor: '#fff6dc',
     borderWidth: 1,
-    borderColor: '#c9b59b',
+    borderColor: '#e8d18a',
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 16,
   },
-  buttonDanger: {
-    backgroundColor: '#fbe2e2',
+  permissionText: {
+    flex: 1,
+    gap: 2,
+  },
+  permissionTitle: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: '#5e4200',
+  },
+  permissionBody: {
+    fontSize: 12,
+    color: '#75521c',
+  },
+  permissionActions: {
+    flexDirection: 'row',
+    gap: 8,
+  },
+  permissionButton: {
+    paddingHorizontal: 12,
+    paddingVertical: 7,
+    borderRadius: 8,
+    backgroundColor: '#ffffff',
     borderWidth: 1,
-    borderColor: '#d48f8f',
+    borderColor: '#e8d18a',
   },
-  buttonDisabled: {
-    opacity: 0.45,
+  permissionButtonLabel: {
+    fontSize: 12,
+    fontWeight: '600',
+    color: '#5e4200',
   },
-  buttonPressed: {
+  pressed: {
     opacity: 0.8,
   },
-  buttonLabel: {
-    color: '#fffaf3',
-    fontSize: 14,
-    fontWeight: '700',
-  },
-  buttonLabelSecondary: {
-    color: '#4a3726',
-  },
-  buttonLabelDanger: {
-    color: '#7c1d1d',
-  },
-  labelValueRow: {
-    gap: 2,
-  },
-  labelValueLabel: {
-    fontSize: 12,
-    fontWeight: '700',
-    color: '#7a614c',
-    textTransform: 'uppercase',
-    letterSpacing: 0.6,
-  },
-  labelValueValue: {
-    fontSize: 15,
-    color: '#2d2115',
-  },
-  input: {
-    borderWidth: 1,
-    borderColor: '#d3c2aa',
-    borderRadius: 14,
-    paddingHorizontal: 14,
-    paddingVertical: 11,
-    backgroundColor: '#fff',
-    color: '#2d2115',
-  },
-  codeInput: {
-    fontFamily: 'Menlo',
-    fontSize: 13,
-  },
-  fieldLabel: {
-    fontSize: 13,
-    fontWeight: '700',
-    color: '#5a4737',
-  },
-  fieldHelp: {
-    fontSize: 12,
-    lineHeight: 18,
-    color: '#7a614c',
-  },
-  notesInput: {
-    minHeight: 90,
-    textAlignVertical: 'top',
-  },
-  previewImage: {
-    width: '100%',
-    height: 260,
-    borderRadius: 14,
-    resizeMode: 'contain',
-    backgroundColor: '#efe6d8',
-  },
-  emptyState: {
-    fontSize: 14,
-    color: '#7a614c',
-    fontStyle: 'italic',
-  },
-  jsonLabel: {
-    fontSize: 12,
-    fontWeight: '700',
-    color: '#7a614c',
-    textTransform: 'uppercase',
-    letterSpacing: 0.6,
-  },
-  jsonBlock: {
-    borderRadius: 14,
+  errorBar: {
+    marginHorizontal: 24,
+    marginTop: 12,
     padding: 14,
-    backgroundColor: '#f2eadf',
-    color: '#2d2115',
-    fontFamily: 'Menlo',
-    fontSize: 12,
-    lineHeight: 18,
-  },
-  fixtureList: {
-    gap: 10,
-  },
-  fixtureRow: {
-    borderRadius: 14,
-    padding: 12,
-    backgroundColor: '#f3ebde',
+    borderRadius: 12,
+    backgroundColor: '#ffe3e3',
     borderWidth: 1,
-    borderColor: '#deceb7',
-    gap: 2,
-  },
-  fixtureRowSelected: {
-    borderColor: '#9a3412',
-    backgroundColor: '#fff0df',
-  },
-  fixtureTitle: {
-    fontSize: 15,
-    fontWeight: '700',
-    color: '#2d2115',
-  },
-  fixtureMeta: {
-    fontSize: 12,
-    color: '#6f5b48',
-  },
-  taskObservationRow: {
-    flexDirection: 'row',
-    alignItems: 'flex-start',
-    gap: 12,
-  },
-  taskObservationImage: {
-    width: 96,
-    height: 72,
-    borderRadius: 10,
-    backgroundColor: '#efe6d8',
-  },
-  taskObservationBody: {
-    flex: 1,
+    borderColor: '#e89c9c',
     gap: 4,
   },
-  warningBadge: {
-    alignSelf: 'flex-start',
-    paddingHorizontal: 10,
-    paddingVertical: 4,
-    borderRadius: 999,
-    backgroundColor: '#fff3d9',
+  errorTitle: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: '#6b1a1a',
+  },
+  errorBody: {
+    fontSize: 12,
+    color: '#6b1a1a',
+  },
+  replanFailureBar: {
+    marginHorizontal: 24,
+    marginTop: 12,
+    padding: 14,
+    borderRadius: 12,
+    backgroundColor: '#fff0f0',
     borderWidth: 1,
-    borderColor: '#f2c96d',
+    borderColor: '#f0c6c6',
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 14,
   },
-  warningBadgeText: {
+  replanFailureText: {
+    flex: 1,
+    gap: 3,
+  },
+  replanFailureTitle: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: '#6b1a1a',
+  },
+  replanFailureBody: {
+    fontSize: 12,
+    color: '#6b1a1a',
+    lineHeight: 18,
+  },
+  replanFailureHint: {
     fontSize: 11,
+    color: '#8a4d4d',
+    lineHeight: 16,
+    marginTop: 2,
+  },
+  replanRetryButton: {
+    paddingHorizontal: 14,
+    paddingVertical: 8,
+    borderRadius: 8,
+    backgroundColor: '#6b1a1a',
+  },
+  replanRetryDisabled: {
+    opacity: 0.45,
+  },
+  replanRetryLabel: {
+    fontSize: 12,
+    fontWeight: '600',
+    color: '#ffffff',
+  },
+  replanFailureBarTransient: {
+    backgroundColor: '#fff6dc',
+    borderColor: '#e8d18a',
+  },
+  replanFailureTitleTransient: {
+    color: '#6b4f00',
+  },
+  replanFailureBodyTransient: {
+    color: '#6b4f00',
+  },
+  replanFailureHintTransient: {
+    color: '#8a6a22',
+  },
+  replanRetryButtonTransient: {
+    backgroundColor: '#6b4f00',
+  },
+  recoveryBar: {
+    marginHorizontal: 24,
+    marginTop: 20,
+    padding: 14,
+    borderRadius: 12,
+    backgroundColor: '#fdf6ff',
+    borderWidth: 1,
+    borderColor: '#d9c9f5',
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 16,
+  },
+  recoveryText: {
+    flex: 1,
+    gap: 3,
+  },
+  recoveryTitle: {
+    fontSize: 13,
     fontWeight: '700',
-    color: '#8a5a00',
+    color: '#3d1f7a',
   },
-  scoreRow: {
-    gap: 8,
+  recoveryBody: {
+    fontSize: 12,
+    color: '#4a3370',
+    lineHeight: 18,
   },
-  scoreLabel: {
-    fontSize: 14,
-    fontWeight: '700',
-    color: '#2d2115',
-  },
-  scoreButtons: {
+  recoveryActions: {
     flexDirection: 'row',
     gap: 8,
   },
-  scoreButton: {
-    width: 34,
-    height: 34,
-    borderRadius: 17,
-    alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: '#f0e5d5',
+  recoverySecondary: {
+    paddingHorizontal: 12,
+    paddingVertical: 7,
+    borderRadius: 8,
+    backgroundColor: '#ffffff',
     borderWidth: 1,
-    borderColor: '#d4c1a7',
+    borderColor: '#d9c9f5',
   },
-  scoreButtonActive: {
-    backgroundColor: '#9a3412',
-    borderColor: '#9a3412',
-  },
-  scoreButtonLabel: {
-    fontSize: 14,
-    fontWeight: '700',
-    color: '#4a3726',
-  },
-  scoreButtonLabelActive: {
-    color: '#fffaf3',
-  },
-  pasteOutputInput: {
-    minHeight: 130,
-    textAlignVertical: 'top',
+  recoverySecondaryLabel: {
     fontSize: 12,
-    lineHeight: 18,
+    fontWeight: '600',
+    color: '#3d1f7a',
+  },
+  recoveryPrimary: {
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: 8,
+    backgroundColor: '#6f3bf5',
+  },
+  recoveryDisabled: {
+    opacity: 0.45,
+  },
+  recoveryPrimaryLabel: {
+    fontSize: 12,
+    fontWeight: '600',
+    color: '#ffffff',
   },
 });
 

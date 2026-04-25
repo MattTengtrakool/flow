@@ -1,5 +1,6 @@
 #import "ContextCaptureModule.h"
 
+#import <AVFoundation/AVFoundation.h>
 #import <ApplicationServices/ApplicationServices.h>
 #import <CommonCrypto/CommonDigest.h>
 #import <CoreGraphics/CGEventSource.h>

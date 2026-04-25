@@ -1,16 +1,16 @@
 # Flow
 
-A macOS menu bar app that passively observes your screen context and generates structured observations about your work using AI. Built with React Native macOS.
+An AI worklog for macOS. Flow passively captures screen context, turns it into structured observations, and periodically writes a planner-backed calendar of what you worked on.
 
-Flow sits quietly in your menu bar, captures what you're working on, and produces machine-readable observations that can power task clustering, time tracking, and work pattern analysis.
+Flow sits quietly in your menu bar, captures what you're working on, and keeps a local event log that can be replayed into a daily work timeline.
 
 ## Features
 
 - **Passive context capture** -- tracks the active app, window title, and screen region without interrupting your workflow
 - **Precise mode** -- uses macOS Accessibility APIs for fine-grained window metadata when granted permission
 - **AI-powered observations** -- sends screenshots and metadata through a strict JSON schema to produce structured, validated observations
-- **Fixture-based evaluation** -- save real captures as fixtures, re-run them later, and score observations for usefulness, confidence, and sensitivity
-- **Local-first storage** -- all data (event log, settings, fixtures) is persisted locally in Application Support
+- **Planner revisions** -- periodically condenses recent observations into calendar blocks with notes, artifacts, confidence, and provenance
+- **Local-first storage** -- the event log and planner snapshots are persisted locally in Application Support
 
 ## Requirements
 
@@ -39,17 +39,15 @@ On first launch, grant **Accessibility** and **Screen Recording** permissions wh
 ## How It Works
 
 ```
-Screen context  -->  Screenshot + metadata  -->  Observation engine  -->  Structured JSON
-                                                      |
-                                              Validated against
-                                              a strict schema
+Screen context -> Capture -> Observation -> Event log -> Planner -> Worklog UI
 ```
 
-1. Flow monitors the frontmost application and window via macOS APIs
-2. On capture, it takes a screenshot of the target window or app
-3. The screenshot and context metadata are sent to an observation engine
-4. The engine returns structured JSON validated against a strict schema
-5. Observations can be saved as fixtures for evaluation and scoring
+1. Flow monitors the frontmost application and window via macOS APIs.
+2. Changed frames are captured with sanitized metadata and OCR text.
+3. The observation engine returns structured JSON validated against a strict schema.
+4. Observations are appended to the local event log.
+5. The planner periodically rewrites the recent work window into calendar blocks.
+6. Today, calendar, insights, chat, and settings screens read from the replayed timeline.
 
 ### Storage
 
@@ -57,33 +55,42 @@ All data stays on your machine:
 
 | Boundary | Contents |
 |---|---|
-| Event log | Append-only timeline of all context changes |
-| Observation settings | API key, model preferences |
-| Fixtures | Saved captures with scores for evaluation |
+| Event log | Sessions, captures, observations, planner revisions, failures, and note edits |
+| Capture previews | In-memory thumbnails for the current app session |
+| Planner snapshots | Calendar blocks derived from recent observations |
 
 ## Project Structure
 
 ```
 App.tsx                          React Native entry point
 src/
+  capture/
+    useCaptureController.ts       Permissions, inspect, and capture commands
   observation/
-    useObservationLab.ts         Observation lab UI hook
-    openaiObservationEngine.ts   AI observation engine
-    schema.ts                    Observation schema & validation
-  state/
-    eventLog.ts                  Event types and replay logic
-    useEventSourcedTimeline.ts   App state and command handlers
+    useObservationLab.ts          App-facing observation/timeline facade
+    geminiObservationEngine.ts    Structured observation provider
+    schema.ts                     Observation schema and validation
+  planner/
+    revisionEngine.ts             Planner revision engine
+    providers/                    Gemini and Anthropic planner providers
+    selectors.ts                  Worklog selectors over planner snapshots
+    types.ts                      Plan block, snapshot, and usage types
+  timeline/
+    eventLog.ts                   Event types and replay logic
+    useTimelineStore.ts           Timeline persistence and orchestration
+  worklog/
+    types.ts                      Worklog block and day view types
   storage/
-    eventLogStorage.ts           JS bridge to native event log
-    observationLabStorage.ts     JS bridge to native observation storage
+    eventLogStorage.ts            JS bridge to native event log
+  ui/
+    screens/                      Today, chat, insights, search, settings
 macos/
   Flow-macOS/
     AppDelegate.mm               Menu bar app setup
     EventLogStorage.mm           Native event log persistence
-    ObservationLabStorage.mm     Native observation + fixture storage
     ContextCaptureModule.mm      Screen context and capture engine
 ```
 
 ## License
 
-Private -- not yet licensed for distribution.
+License TBD.

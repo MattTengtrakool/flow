@@ -13,11 +13,11 @@
 		514201582437B4B40078DB4F /* main.m in Sources */ = {isa = PBXBuildFile; fileRef = 514201572437B4B40078DB4F /* main.m */; };
 		6A0E35F124378D120078DB4F /* EventLogStorage.mm in Sources */ = {isa = PBXBuildFile; fileRef = 6A0E35F024378D120078DB4F /* EventLogStorage.mm */; };
 		6A0E360124378D120078DB4F /* ContextCaptureModule.mm in Sources */ = {isa = PBXBuildFile; fileRef = 6A0E360024378D120078DB4F /* ContextCaptureModule.mm */; };
-		6A0E361124378D120078DB4F /* ObservationLabStorage.mm in Sources */ = {isa = PBXBuildFile; fileRef = 6A0E361024378D120078DB4F /* ObservationLabStorage.mm */; };
 		7C4C2686D4588345EFACF020 /* PrivacyInfo.xcprivacy in Resources */ = {isa = PBXBuildFile; fileRef = FF1D1F4555ED3EAA5927CDA8 /* PrivacyInfo.xcprivacy */; };
 		D02690DB13324B2CD33E1665 /* libPods-Flow-macOS.a in Frameworks */ = {isa = PBXBuildFile; fileRef = 233EAEF1C2F782CA60570424 /* libPods-Flow-macOS.a */; };
 		DA3C1D3E2F5B4A7C8D9E0011 /* ScreenCaptureKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = DA3C1D3D2F5B4A7C8D9E0011 /* ScreenCaptureKit.framework */; };
 		DA3C1D402F5B4A7C8D9E0013 /* Vision.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = DA3C1D3F2F5B4A7C8D9E0012 /* Vision.framework */; };
+		DA3C1D422F5B4A7C8D9E0015 /* AVFoundation.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = DA3C1D412F5B4A7C8D9E0014 /* AVFoundation.framework */; };
 		DFDB76CC0DA80AF230804A72 /* PrivacyInfo.xcprivacy in Resources */ = {isa = PBXBuildFile; fileRef = FF1D1F4555ED3EAA5927CDA8 /* PrivacyInfo.xcprivacy */; };
 /* End PBXBuildFile section */
 
@@ -37,10 +37,9 @@
 		6A0E35F024378D120078DB4F /* EventLogStorage.mm */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.objcpp; path = EventLogStorage.mm; sourceTree = "<group>"; };
 		6A0E35FF24378D120078DB4F /* ContextCaptureModule.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = ContextCaptureModule.h; sourceTree = "<group>"; };
 		6A0E360024378D120078DB4F /* ContextCaptureModule.mm */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.objcpp; path = ContextCaptureModule.mm; sourceTree = "<group>"; };
-		6A0E360F24378D120078DB4F /* ObservationLabStorage.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = ObservationLabStorage.h; sourceTree = "<group>"; };
-		6A0E361024378D120078DB4F /* ObservationLabStorage.mm */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.objcpp; path = ObservationLabStorage.mm; sourceTree = "<group>"; };
 		DA3C1D3D2F5B4A7C8D9E0011 /* ScreenCaptureKit.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = ScreenCaptureKit.framework; path = System/Library/Frameworks/ScreenCaptureKit.framework; sourceTree = SDKROOT; };
 		DA3C1D3F2F5B4A7C8D9E0012 /* Vision.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Vision.framework; path = System/Library/Frameworks/Vision.framework; sourceTree = SDKROOT; };
+		DA3C1D412F5B4A7C8D9E0014 /* AVFoundation.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = AVFoundation.framework; path = System/Library/Frameworks/AVFoundation.framework; sourceTree = SDKROOT; };
 		E861A1F39F439F4BAD656623 /* Pods-Flow-macOS.release.xcconfig */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.xcconfig; name = "Pods-Flow-macOS.release.xcconfig"; path = "Target Support Files/Pods-Flow-macOS/Pods-Flow-macOS.release.xcconfig"; sourceTree = "<group>"; };
 		ED297162215061F000B7C4FE /* JavaScriptCore.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = JavaScriptCore.framework; path = System/Library/Frameworks/JavaScriptCore.framework; sourceTree = SDKROOT; };
 		FF1D1F4555ED3EAA5927CDA8 /* PrivacyInfo.xcprivacy */ = {isa = PBXFileReference; includeInIndex = 1; path = PrivacyInfo.xcprivacy; sourceTree = "<group>"; };
@@ -59,6 +58,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				D02690DB13324B2CD33E1665 /* libPods-Flow-macOS.a in Frameworks */,
+				DA3C1D422F5B4A7C8D9E0015 /* AVFoundation.framework in Frameworks */,
 				DA3C1D3E2F5B4A7C8D9E0011 /* ScreenCaptureKit.framework in Frameworks */,
 				DA3C1D402F5B4A7C8D9E0013 /* Vision.framework in Frameworks */,
 			);
@@ -71,6 +71,7 @@
 			isa = PBXGroup;
 			children = (
 				ED297162215061F000B7C4FE /* JavaScriptCore.framework */,
+				DA3C1D412F5B4A7C8D9E0014 /* AVFoundation.framework */,
 				DA3C1D3D2F5B4A7C8D9E0011 /* ScreenCaptureKit.framework */,
 				DA3C1D3F2F5B4A7C8D9E0012 /* Vision.framework */,
 				233EAEF1C2F782CA60570424 /* libPods-Flow-macOS.a */,
@@ -87,8 +88,6 @@
 				6A0E35F024378D120078DB4F /* EventLogStorage.mm */,
 				6A0E35FF24378D120078DB4F /* ContextCaptureModule.h */,
 				6A0E360024378D120078DB4F /* ContextCaptureModule.mm */,
-				6A0E360F24378D120078DB4F /* ObservationLabStorage.h */,
-				6A0E361024378D120078DB4F /* ObservationLabStorage.mm */,
 				514201512437B4B40078DB4F /* Assets.xcassets */,
 				514201532437B4B40078DB4F /* Main.storyboard */,
 				514201562437B4B40078DB4F /* Info.plist */,
@@ -355,7 +354,6 @@
 				5142014D2437B4B30078DB4F /* AppDelegate.mm in Sources */,
 				6A0E35F124378D120078DB4F /* EventLogStorage.mm in Sources */,
 				6A0E360124378D120078DB4F /* ContextCaptureModule.mm in Sources */,
-				6A0E361124378D120078DB4F /* ObservationLabStorage.mm in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

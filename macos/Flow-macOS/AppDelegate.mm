@@ -15,6 +15,11 @@
 - (void)applicationDidFinishLaunching:(NSNotification *)notification
 {
   NSLog(@"[Flow] applicationDidFinishLaunching");
+#if DEBUG
+  // Point the packager at port 8082 so Flow does not clash with other RN/Expo
+  // projects that run on the default 8081.
+  [RCTBundleURLProvider sharedSettings].jsLocation = @"localhost:8082";
+#endif
   self.automaticallyLoadReactNativeWindow = NO;
   self.moduleName = @"Flow";
   self.initialProps = @{};
@@ -49,15 +54,20 @@
   self.statusItem.visible = YES;
 
   if (self.statusItem.button != nil) {
-    NSImage *icon = [NSImage imageWithSystemSymbolName:@"record.circle" accessibilityDescription:@"Flow"];
+    NSImage *icon = [NSImage imageNamed:@"MenuBarIcon"];
+
+    if (icon == nil) {
+      icon = [NSImage imageWithSystemSymbolName:@"waveform.path" accessibilityDescription:@"Flow"];
+    }
 
     if (icon != nil) {
+      icon.size = NSMakeSize(18, 18);
       [icon setTemplate:YES];
       self.statusItem.button.image = icon;
     }
 
     self.statusItem.button.imagePosition = NSImageLeading;
-    self.statusItem.button.title = @"Gran";
+    self.statusItem.button.title = @"Flow";
     self.statusItem.button.toolTip = @"Flow";
     NSLog(@"[Flow] status item button created with title %@", self.statusItem.button.title);
   } else {

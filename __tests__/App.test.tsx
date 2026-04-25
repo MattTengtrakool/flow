@@ -7,7 +7,7 @@ import ReactTestRenderer from 'react-test-renderer';
 
 import App from '../App';
 
-test('renders the observation lab shell', async () => {
+test('renders the Flow app shell', async () => {
   let renderer!: ReactTestRenderer.ReactTestRenderer;
 
   await ReactTestRenderer.act(async () => {
@@ -15,19 +15,12 @@ test('renders the observation lab shell', async () => {
     await Promise.resolve();
   });
 
-  expect(renderer.root.findByProps({testID: 'app-running'}).props.children).toBe(
-    'App running',
-  );
-  expect(
-    renderer.root.findByProps({testID: 'capture-now-button'}),
-  ).toBeTruthy();
-  expect(
-    renderer.root.findByProps({testID: 'observe-last-capture-button'}),
-  ).toBeTruthy();
-  expect(
-    renderer.root.findByProps({testID: 'save-fixture-button'}),
-  ).toBeTruthy();
-  expect(
-    renderer.root.findByProps({testID: 'start-manual-workflow-button'}),
-  ).toBeTruthy();
+  expect(renderer.root.findByProps({testID: 'app-running'})).toBeTruthy();
+  expect(renderer.root.findAllByProps({children: 'flow'}).length).toBeGreaterThan(0);
+  expect(renderer.root.findAllByProps({children: 'Calendar'}).length).toBeGreaterThan(0);
+
+  await ReactTestRenderer.act(async () => {
+    renderer.unmount();
+    await Promise.resolve();
+  });
 });

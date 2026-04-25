@@ -1,6 +1,6 @@
 import {NativeModules} from 'react-native';
 
-import type {DomainEvent} from '../state/eventLog';
+import type {DomainEvent} from '../timeline/eventLog';
 
 type PersistedEventLogPayload = {
   eventLog: DomainEvent[];
