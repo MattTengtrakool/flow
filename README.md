@@ -16,25 +16,47 @@ Flow sits quietly in your menu bar, captures what you're working on, and keeps a
 
 - macOS 14.0+
 - Node.js 22+
-- Xcode 15+
-- CocoaPods
+- pnpm
+- Xcode 15+ command line tools for the native capture helper
 
 ## Getting Started
 
 ```bash
 # Install dependencies
-npm install
+pnpm install
 
-# Install native pods
-cd macos && pod install && cd ..
+# Build the native capture helper
+pnpm native-capture:build
 
-# Start Metro bundler
-npm start
+# Start the Electron app in development
+pnpm electron:dev
 ```
 
-Then open `macos/Flow.xcworkspace` in Xcode, select the **Flow-macOS** scheme, and run.
+To create a packaged macOS app directory:
+
+```bash
+pnpm electron:dist
+```
 
 On first launch, grant **Accessibility** and **Screen Recording** permissions when prompted.
+
+## Development
+
+```bash
+pnpm test
+pnpm lint
+pnpm typecheck
+pnpm native-capture:build
+pnpm electron:build
+```
+
+More details:
+
+- [Architecture](docs/architecture.md)
+- [Release](docs/release.md)
+- [Parity QA](docs/electron-parity-qa.md)
+- [Contributing](CONTRIBUTING.md)
+- [Security](SECURITY.md)
 
 ## How It Works
 
@@ -62,12 +84,13 @@ All data stays on your machine:
 ## Project Structure
 
 ```
-App.tsx                          React Native entry point
+electron/
+  main/                          Electron main process, IPC, storage, AI services
+  preload/                       Typed window.flow bridge
+  renderer/                      React DOM app
+  native-capture/                macOS ScreenCaptureKit/Vision helper
 src/
-  capture/
-    useCaptureController.ts       Permissions, inspect, and capture commands
   observation/
-    useObservationLab.ts          App-facing observation/timeline facade
     geminiObservationEngine.ts    Structured observation provider
     schema.ts                     Observation schema and validation
   planner/
@@ -77,20 +100,17 @@ src/
     types.ts                      Plan block, snapshot, and usage types
   timeline/
     eventLog.ts                   Event types and replay logic
-    useTimelineStore.ts           Timeline persistence and orchestration
   worklog/
     types.ts                      Worklog block and day view types
-  storage/
-    eventLogStorage.ts            JS bridge to native event log
-  ui/
-    screens/                      Today, chat, insights, search, settings
-macos/
-  Flow-macOS/
-    AppDelegate.mm               Menu bar app setup
-    EventLogStorage.mm           Native event log persistence
-    ContextCaptureModule.mm      Screen context and capture engine
 ```
+
+## Runtime
+
+Flow now runs as an Electron app. The shared domain model, event log replay,
+planner, observation schema, chat tools, and privacy redaction remain in `src/`.
+Electron owns app boot, storage IPC, AI IPC, renderer UI, packaging, and the
+native macOS capture helper.
 
 ## License
 
-License TBD.
+MIT. See [LICENSE](LICENSE).

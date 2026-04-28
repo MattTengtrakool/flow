@@ -217,7 +217,7 @@ function cloneTimeline(timeline: TimelineView): TimelineView {
   };
 }
 
-function applyEventInPlace(timeline: TimelineView, event: DomainEvent) {
+export function applyEventInPlace(timeline: TimelineView, event: DomainEvent) {
   switch (event.type) {
     case 'session_started': {
       timeline.sessionsById[event.sessionId] = {

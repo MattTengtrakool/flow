@@ -1,5 +1,4 @@
-import {ANTHROPIC_API_KEY} from '@env';
-
+import {getConfiguredApiKey} from '../../config/apiKeys';
 import {OBSERVATION_ACTIVITY_TYPES} from '../../observation/types';
 import {sampleObservationIds} from '../condenseObservations';
 import {
@@ -130,7 +129,9 @@ export class AnthropicRetryableError extends Error {
 export async function generateReplanBlocksWithAnthropic(
   input: GeminiReplanInput,
 ): Promise<GeminiReplanResult> {
-  const apiKey = (input.apiKey ?? ANTHROPIC_API_KEY ?? '').trim();
+  const apiKey = (
+    input.apiKey ?? getConfiguredApiKey('ANTHROPIC_API_KEY')
+  ).trim();
   if (apiKey.length === 0) {
     throw new Error(
       'An Anthropic API key is required to use the Claude fallback. Set ANTHROPIC_API_KEY in .env.',

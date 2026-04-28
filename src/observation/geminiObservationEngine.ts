@@ -1,5 +1,4 @@
-import {GEMINI_API_KEY} from '@env';
-
+import {getConfiguredApiKey} from '../config/apiKeys';
 import {
   redactSensitiveText,
   sanitizeCaptureMetadata,
@@ -184,8 +183,9 @@ function buildObservationPrompt(input: ObservationEngineInput): string {
 export async function generateObservation(
   input: ObservationEngineInput,
   model = DEFAULT_OBSERVATION_MODEL,
+  apiKey = getConfiguredApiKey('GEMINI_API_KEY'),
 ): Promise<ObservationRun> {
-  const trimmedApiKey = (GEMINI_API_KEY ?? '').trim();
+  const trimmedApiKey = apiKey.trim();
 
   if (trimmedApiKey.length === 0) {
     throw new Error(

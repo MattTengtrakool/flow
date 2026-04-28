@@ -4,24 +4,25 @@ Flow has one runtime model: capture work context, record observations, revise th
 
 ```mermaid
 flowchart LR
-  nativeCapture[Native Capture] --> capture[Capture Controller]
-  capture --> observation[Observation Engine]
+  nativeCapture[Native Capture Helper] --> main[Electron Main]
+  main --> observation[Observation Engine]
   observation --> eventLog[Event Log]
   eventLog --> planner[Planner Revision Engine]
   planner --> eventLog
   eventLog --> worklog[Worklog Selectors]
-  worklog --> ui[React Native UI]
+  worklog --> ui[Electron Renderer UI]
   eventLog --> chat[Chat Tools]
 ```
 
 ## Domains
 
-- `src/capture/` owns screen permissions, capture inspection, and capture commands.
+- `electron/native-capture/` owns screen permissions, capture inspection, screenshot capture, OCR, redaction, and hashing.
+- `electron/main/` owns IPC, storage, capture orchestration, planner cadence, and model-provider calls.
+- `electron/renderer/` owns presentation and user interactions.
 - `src/observation/` owns structured observation generation and schema validation.
-- `src/timeline/` owns append-only events, replay, persistence, and session orchestration.
+- `src/timeline/` owns append-only event types and replay.
 - `src/planner/` owns planner revision prompts, model providers, cost summaries, and selectors over planner snapshots.
 - `src/worklog/` owns shared worklog types consumed by planner selectors and UI.
-- `src/ui/` owns React Native presentation components and product screens.
 
 ## Event Log
 

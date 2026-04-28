@@ -1,5 +1,4 @@
-import {GEMINI_API_KEY} from '@env';
-
+import {getConfiguredApiKey} from '../config/apiKeys';
 import type {TimelineView} from '../timeline/eventLog';
 import {
   CHAT_TOOL_DECLARATIONS,
@@ -77,7 +76,7 @@ export type RunChatTurnResult = {
 export async function runChatTurn(
   args: RunChatTurnArgs,
 ): Promise<RunChatTurnResult> {
-  const apiKey = (args.apiKey ?? GEMINI_API_KEY ?? '').trim();
+  const apiKey = (args.apiKey ?? getConfiguredApiKey('GEMINI_API_KEY')).trim();
   if (apiKey.length === 0) {
     throw new Error(
       'A Gemini API key is required for chat. Set GEMINI_API_KEY in .env.',

@@ -1,0 +1,97 @@
+import {app} from 'electron';
+import fs from 'node:fs/promises';
+import path from 'node:path';
+
+import type {DomainEvent} from '../../../src/timeline/eventLog';
+
+export type PersistedEventLogPayload = {
+  eventLog: DomainEvent[];
+  filePath: string;
+};
+
+export type SaveEventLogResult = {
+  filePath: string;
+  savedAt: string;
+};
+
+export function getEventLogDirectoryPath(): string {
+  return path.join(app.getPath('appData'), 'Flow');
+}
+
+export function getEventLogFilePath(): string {
+  return path.join(getEventLogDirectoryPath(), 'event-log.json');
+}
+
+function getPackagedUserDataEventLogFilePath(): string {
+  return path.join(app.getPath('userData'), 'event-log.json');
+}
+
+async function ensureEventLogDirectoryExists() {
+  await fs.mkdir(getEventLogDirectoryPath(), {recursive: true});
+}
+
+export async function loadEventLog(): Promise<PersistedEventLogPayload> {
+  await ensureEventLogDirectoryExists();
+  const filePath = getEventLogFilePath();
+  const packagedPath = getPackagedUserDataEventLogFilePath();
+
+  try {
+    const fileContents = await fs.readFile(filePath, 'utf8');
+    const parsed = JSON.parse(fileContents) as unknown;
+    if (!Array.isArray(parsed)) {
+      throw new Error('The event log file does not contain an array.');
+    }
+
+    return {
+      eventLog: parsed as DomainEvent[],
+      filePath,
+    };
+  } catch (error) {
+    if (
+      error != null &&
+      typeof error === 'object' &&
+      'code' in error &&
+      error.code === 'ENOENT'
+    ) {
+      if (packagedPath !== filePath) {
+        try {
+          const packagedContents = await fs.readFile(packagedPath, 'utf8');
+          const parsed = JSON.parse(packagedContents) as unknown;
+          if (!Array.isArray(parsed)) {
+            throw new Error('The Electron event log file does not contain an array.');
+          }
+          await saveEventLog(parsed as DomainEvent[]);
+          return {eventLog: parsed as DomainEvent[], filePath};
+        } catch (packagedError) {
+          if (
+            packagedError == null ||
+            typeof packagedError !== 'object' ||
+            !('code' in packagedError) ||
+            packagedError.code !== 'ENOENT'
+          ) {
+            throw packagedError;
+          }
+        }
+      }
+      return {eventLog: [], filePath};
+    }
+    throw error;
+  }
+}
+
+export async function saveEventLog(
+  eventLog: DomainEvent[],
+): Promise<SaveEventLogResult> {
+  await ensureEventLogDirectoryExists();
+  const filePath = getEventLogFilePath();
+  const temporaryPath = `${filePath}.tmp`;
+  const serialized = JSON.stringify(eventLog, null, 2);
+
+  await fs.writeFile(temporaryPath, serialized, 'utf8');
+  await fs.rename(temporaryPath, filePath);
+
+  return {
+    filePath,
+    savedAt: new Date().toISOString(),
+  };
+}

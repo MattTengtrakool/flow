@@ -1,5 +1,4 @@
-import {GEMINI_API_KEY} from '@env';
-
+import {getConfiguredApiKey} from '../../config/apiKeys';
 import {OBSERVATION_ACTIVITY_TYPES} from '../../observation/types';
 import {sampleObservationIds} from '../condenseObservations';
 import {
@@ -180,7 +179,7 @@ type GeminiResponse = {
 export async function generateReplanBlocks(
   input: GeminiReplanInput,
 ): Promise<GeminiReplanResult> {
-  const apiKey = (input.apiKey ?? GEMINI_API_KEY ?? '').trim();
+  const apiKey = (input.apiKey ?? getConfiguredApiKey('GEMINI_API_KEY')).trim();
   if (apiKey.length === 0) {
     throw new Error('A Google AI API key is required before running planner revisions.');
   }

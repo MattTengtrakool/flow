@@ -12,6 +12,23 @@ import {mapBlockToWorklogCalendarBlock, type PlanBlock} from './types';
 
 const READ_TIME_BLOCK_BUFFER_MS = 2 * 60 * 1000;
 
+// Cache formatters by timezone — timezone changes are rare (effectively once per session)
+const dateKeyFormatters = new Map<string, Intl.DateTimeFormat>();
+
+function toDateKey(iso: string, timezone: string): string {
+  let fmt = dateKeyFormatters.get(timezone);
+  if (fmt == null) {
+    fmt = new Intl.DateTimeFormat('en-CA', {
+      timeZone: timezone,
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+    });
+    dateKeyFormatters.set(timezone, fmt);
+  }
+  return fmt.format(new Date(iso));
+}
+
 /**
  * Apply outlier pruning + tight time-clamping at READ time.
  *
@@ -74,7 +91,9 @@ export function getDayWorklog(
   timezone: string,
 ): WorklogDayView {
   const targetDayKey = toDateKey(dateIso, timezone);
-  const rawBlocks = selectBlocksForDay(timeline, targetDayKey, timezone);
+  // Pre-parse snapshot windows once — shared across all blocks in this call
+  const snapshotWindowMs = buildSnapshotWindowMs(timeline);
+  const rawBlocks = selectBlocksForDay(timeline, snapshotWindowMs, targetDayKey, timezone);
   const blocks = rawBlocks.map(block =>
     cleanBlockOfOutliers(block, timeline.observationsById),
   );
@@ -99,8 +118,18 @@ export function getDayWorklog(
   };
 }
 
+type SnapshotWindowMs = {startMs: number; endMs: number};
+
+function buildSnapshotWindowMs(timeline: TimelineView): SnapshotWindowMs[] {
+  return timeline.planSnapshots.map(s => ({
+    startMs: Date.parse(s.windowStartAt),
+    endMs: Date.parse(s.windowEndAt),
+  }));
+}
+
 function selectBlocksForDay(
   timeline: TimelineView,
+  snapshotWindowMs: SnapshotWindowMs[],
   targetDayKey: string,
   timezone: string,
 ): PlanBlock[] {
@@ -123,7 +152,7 @@ function selectBlocksForDay(
         continue;
       }
 
-      if (!isLatestSnapshotForBlockRange(timeline, i, block)) {
+      if (isBlockSupersededByLaterSnapshot(snapshotWindowMs, i, block)) {
         continue;
       }
 
@@ -138,8 +167,8 @@ function selectBlocksForDay(
   return selected.sort((a, b) => a.startAt.localeCompare(b.startAt));
 }
 
-function isLatestSnapshotForBlockRange(
-  timeline: TimelineView,
+function isBlockSupersededByLaterSnapshot(
+  snapshotWindowMs: SnapshotWindowMs[],
   currentIndex: number,
   block: PlanBlock,
 ): boolean {
@@ -147,15 +176,13 @@ function isLatestSnapshotForBlockRange(
   const blockEndMs = Date.parse(block.endAt);
   const midpointMs = blockStartMs + (blockEndMs - blockStartMs) / 2;
 
-  for (let j = timeline.planSnapshots.length - 1; j > currentIndex; j -= 1) {
-    const laterSnapshot = timeline.planSnapshots[j];
-    const windowStartMs = Date.parse(laterSnapshot.windowStartAt);
-    const windowEndMs = Date.parse(laterSnapshot.windowEndAt);
-    if (midpointMs >= windowStartMs && midpointMs <= windowEndMs) {
-      return false;
+  for (let j = snapshotWindowMs.length - 1; j > currentIndex; j -= 1) {
+    const {startMs, endMs} = snapshotWindowMs[j];
+    if (midpointMs >= startMs && midpointMs <= endMs) {
+      return true;
     }
   }
-  return true;
+  return false;
 }
 
 function blockMidpointMatchesDay(
@@ -167,15 +194,6 @@ function blockMidpointMatchesDay(
   const endMs = Date.parse(block.endAt);
   const midpoint = new Date(startMs + (endMs - startMs) / 2).toISOString();
   return toDateKey(midpoint, timezone) === targetDayKey;
-}
-
-function toDateKey(iso: string, timezone: string): string {
-  return new Intl.DateTimeFormat('en-CA', {
-    timeZone: timezone,
-    year: 'numeric',
-    month: '2-digit',
-    day: '2-digit',
-  }).format(new Date(iso));
 }
 
 function hashSources(ids: string[]): string {
@@ -198,14 +216,16 @@ export function getWorklogForDates(
   dateIsos: string[],
   timezone: string,
 ): Record<string, WorklogCalendarBlock[]> {
+  // Build snapshot window ranges once for all dates
+  const snapshotWindowMs = buildSnapshotWindowMs(timeline);
   const result: Record<string, WorklogCalendarBlock[]> = {};
   for (const dateIso of dateIsos) {
-    const view = getDayWorklog(
-      timeline,
-      `${dateIso}T12:00:00.000Z`,
-      timezone,
+    const targetDayKey = toDateKey(`${dateIso}T12:00:00.000Z`, timezone);
+    const rawBlocks = selectBlocksForDay(timeline, snapshotWindowMs, targetDayKey, timezone);
+    const blocks = rawBlocks.map(block =>
+      cleanBlockOfOutliers(block, timeline.observationsById),
     );
-    result[view.dateIso] = view.blocks;
+    result[targetDayKey] = blocks.map(block => mapBlockToWorklogCalendarBlock(block));
   }
   return result;
 }
@@ -216,6 +236,7 @@ export function getAllPlanCalendarBlocks(
   const selected: PlanBlock[] = [];
   const seenIds = new Set<string>();
   const seenSourceHashes = new Set<string>();
+  const snapshotWindowMs = buildSnapshotWindowMs(timeline);
 
   for (let i = timeline.planSnapshots.length - 1; i >= 0; i -= 1) {
     const snapshot = timeline.planSnapshots[i];
@@ -223,7 +244,7 @@ export function getAllPlanCalendarBlocks(
       if (seenIds.has(block.id)) continue;
       const sourceHash = hashSources(block.sourceObservationIds);
       if (sourceHash.length > 0 && seenSourceHashes.has(sourceHash)) continue;
-      if (!isLatestSnapshotForBlockRange(timeline, i, block)) continue;
+      if (isBlockSupersededByLaterSnapshot(snapshotWindowMs, i, block)) continue;
 
       seenIds.add(block.id);
       if (sourceHash.length > 0) seenSourceHashes.add(sourceHash);

@@ -11,13 +11,13 @@ if (typeof styleText !== 'function') {
   fail(
     [
       '',
-      'This project needs Node 22+ for the React Native CLI.',
+      'This project needs Node 22+ for the Electron toolchain.',
       `Current Node: ${process.version}`,
       '',
       'Use these commands, then try again:',
       'export PATH="/opt/homebrew/opt/node@22/bin:$PATH"',
       'node -v',
-      'npm start',
+      'pnpm start',
       '',
     ].join('\n'),
   );
@@ -35,7 +35,7 @@ if (!Number.isFinite(majorVersion) || majorVersion < 22) {
       'Use these commands, then try again:',
       'export PATH="/opt/homebrew/opt/node@22/bin:$PATH"',
       'node -v',
-      'npm start',
+      'pnpm start',
       '',
     ].join('\n'),
   );

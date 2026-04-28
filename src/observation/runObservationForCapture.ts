@@ -20,6 +20,7 @@ export type ObserveCaptureArgs = {
   currentContext: ContextSnapshotPayload | null;
   recentObservations: StructuredObservation[];
   model?: string;
+  apiKey?: string;
 };
 
 function toBase64Payload(dataUri: string | null): string | null {
@@ -73,5 +74,6 @@ export async function generateStructuredObservationForCapture(
       recentObservations: args.recentObservations,
     },
     args.model ?? DEFAULT_OBSERVATION_MODEL,
+    args.apiKey,
   );
 }

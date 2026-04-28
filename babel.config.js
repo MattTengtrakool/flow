@@ -1,6 +1,6 @@
 module.exports = {
-  presets: ['module:@react-native/babel-preset'],
-  plugins: [
-    ['module:react-native-dotenv', {allowUndefined: true}],
+  presets: [
+    ['@babel/preset-env', {targets: {node: 'current'}}],
+    ['@babel/preset-typescript', {isTSX: true, allExtensions: true}],
   ],
 };
