@@ -111,11 +111,11 @@ export function getDayWorklog(
   timezone: string,
 ): WorklogDayView {
   const targetDayKey = toDateKey(dateIso, timezone);
-  const taskBlocks = selectTaskBlocksForDay(timeline, targetDayKey, timezone);
-  const worklogBlocks =
-    taskBlocks.length > 0
-      ? taskBlocks
-      : selectPlanBlocksForDay(timeline, targetDayKey, timezone);
+  const worklogBlocks = selectWorklogBlocksForDay(
+    timeline,
+    targetDayKey,
+    timezone,
+  );
   const focusedMinutes = worklogBlocks.reduce((sum, block) => {
     const durationMs = Math.max(
       0,
@@ -136,13 +136,28 @@ export function getDayWorklog(
   };
 }
 
+function selectWorklogBlocksForDay(
+  timeline: TimelineView,
+  targetDayKey: string,
+  timezone: string,
+  snapshotWindowMs = buildSnapshotWindowMs(timeline),
+): WorklogCalendarBlock[] {
+  const planBlocks = selectPlanBlocksForDay(
+    timeline,
+    targetDayKey,
+    timezone,
+    snapshotWindowMs,
+  );
+  const taskBlocks = selectTaskBlocksForDay(timeline, targetDayKey, timezone);
+  return mergePlannerAndTaskBlocks(planBlocks, taskBlocks);
+}
+
 function selectPlanBlocksForDay(
   timeline: TimelineView,
   targetDayKey: string,
   timezone: string,
+  snapshotWindowMs = buildSnapshotWindowMs(timeline),
 ): WorklogCalendarBlock[] {
-  // Pre-parse snapshot windows once — shared across all blocks in this call
-  const snapshotWindowMs = buildSnapshotWindowMs(timeline);
   const rawBlocks = selectBlocksForDay(
     timeline,
     snapshotWindowMs,
@@ -262,25 +277,12 @@ export function getWorklogForDates(
   const result: Record<string, WorklogCalendarBlock[]> = {};
   for (const dateIso of dateIsos) {
     const targetDayKey = toDateKey(`${dateIso}T12:00:00.000Z`, timezone);
-    const taskBlocks = selectTaskBlocksForDay(timeline, targetDayKey, timezone);
-    if (taskBlocks.length > 0) {
-      result[targetDayKey] = taskBlocks;
-      continue;
-    }
-    const rawBlocks = selectBlocksForDay(
+    result[targetDayKey] = selectWorklogBlocksForDay(
       timeline,
-      snapshotWindowMs,
       targetDayKey,
       timezone,
+      snapshotWindowMs,
     );
-    const blocks = rawBlocks.map(block =>
-      cleanBlockOfOutliers(block, timeline.observationsById),
-    );
-    result[targetDayKey] = blocks
-      .map(block =>
-        applyUserCorrections(mapBlockToWorklogCalendarBlock(block), timeline),
-      )
-      .filter(isDisplayableWorklogBlock);
   }
   return result;
 }
@@ -293,11 +295,6 @@ export function getAllPlanCalendarBlocks(
   const seenIds = new Set<string>();
   const seenSourceHashes = new Set<string>();
   const snapshotWindowMs = buildSnapshotWindowMs(timeline);
-  const taskDayKeys = new Set(
-    taskBlocks.map(block =>
-      new Date(block.startTime).toISOString().slice(0, 10),
-    ),
-  );
 
   for (let i = timeline.planSnapshots.length - 1; i >= 0; i -= 1) {
     const snapshot = timeline.planSnapshots[i];
@@ -307,7 +304,6 @@ export function getAllPlanCalendarBlocks(
       if (sourceHash.length > 0 && seenSourceHashes.has(sourceHash)) continue;
       if (isBlockSupersededByLaterSnapshot(snapshotWindowMs, i, block))
         continue;
-      if (taskDayKeys.has(block.startAt.slice(0, 10))) continue;
 
       seenIds.add(block.id);
       if (sourceHash.length > 0) seenSourceHashes.add(sourceHash);
@@ -323,9 +319,128 @@ export function getAllPlanCalendarBlocks(
     )
     .filter(isDisplayableWorklogBlock);
 
-  return [...taskBlocks, ...planBlocks].sort((a, b) =>
-    a.startTime.localeCompare(b.startTime),
+  return mergePlannerAndTaskBlocks(planBlocks, taskBlocks);
+}
+
+function mergePlannerAndTaskBlocks(
+  planBlocks: WorklogCalendarBlock[],
+  taskBlocks: WorklogCalendarBlock[],
+): WorklogCalendarBlock[] {
+  if (planBlocks.length === 0) return taskBlocks;
+  if (taskBlocks.length === 0) return planBlocks;
+
+  const retainedPlanBlocks = planBlocks.filter(
+    block => !isWeakPlannerDuplicateOfTask(block, taskBlocks),
   );
+  const retainedTaskBlocks = taskBlocks.filter(
+    taskBlock =>
+      !retainedPlanBlocks.some(planBlock =>
+        blocksRepresentSameWork(planBlock, taskBlock),
+      ),
+  );
+
+  return [...retainedPlanBlocks, ...retainedTaskBlocks].sort(
+    compareWorklogBlocks,
+  );
+}
+
+function isWeakPlannerDuplicateOfTask(
+  planBlock: WorklogCalendarBlock,
+  taskBlocks: WorklogCalendarBlock[],
+): boolean {
+  if (isStrongPlannerBlock(planBlock)) return false;
+  const planDurationMs = blockDurationMs(planBlock);
+  return taskBlocks.some(
+    taskBlock =>
+      blocksRepresentSameWork(planBlock, taskBlock) &&
+      blockDurationMs(taskBlock) > planDurationMs,
+  );
+}
+
+function isStrongPlannerBlock(block: WorklogCalendarBlock): boolean {
+  if (block.userCorrection != null) return true;
+  const sourceObservationCount = new Set(
+    block.summary.provenance.supportedByObservationIds,
+  ).size;
+  if (sourceObservationCount > 1) return true;
+  return blockDurationMs(block) >= MIN_UNANCHORED_BLOCK_DISPLAY_MS;
+}
+
+function blocksRepresentSameWork(
+  a: WorklogCalendarBlock,
+  b: WorklogCalendarBlock,
+): boolean {
+  if (shareObservationSupport(a, b)) return true;
+  return blocksMeaningfullyOverlap(a, b);
+}
+
+function shareObservationSupport(
+  a: WorklogCalendarBlock,
+  b: WorklogCalendarBlock,
+): boolean {
+  const aSources = new Set(a.summary.provenance.supportedByObservationIds);
+  if (aSources.size === 0) return false;
+  return b.summary.provenance.supportedByObservationIds.some(id =>
+    aSources.has(id),
+  );
+}
+
+function blocksMeaningfullyOverlap(
+  a: WorklogCalendarBlock,
+  b: WorklogCalendarBlock,
+): boolean {
+  const aStartMs = Date.parse(a.startTime);
+  const aEndMs = Date.parse(a.endTime);
+  const bStartMs = Date.parse(b.startTime);
+  const bEndMs = Date.parse(b.endTime);
+  if (
+    [aStartMs, aEndMs, bStartMs, bEndMs].some(value => Number.isNaN(value))
+  ) {
+    return false;
+  }
+
+  const overlapMs = Math.min(aEndMs, bEndMs) - Math.max(aStartMs, bStartMs);
+  if (overlapMs <= 0) return false;
+
+  const smallerDurationMs = Math.max(
+    60 * 1000,
+    Math.min(aEndMs - aStartMs, bEndMs - bStartMs),
+  );
+  if (overlapMs >= smallerDurationMs * 0.5) return true;
+
+  const aMidpointMs = aStartMs + (aEndMs - aStartMs) / 2;
+  const bMidpointMs = bStartMs + (bEndMs - bStartMs) / 2;
+  return (
+    isPointInsideRange(aMidpointMs, bStartMs, bEndMs) ||
+    isPointInsideRange(bMidpointMs, aStartMs, aEndMs)
+  );
+}
+
+function isPointInsideRange(pointMs: number, startMs: number, endMs: number) {
+  return pointMs >= startMs && pointMs <= endMs;
+}
+
+function blockDurationMs(block: WorklogCalendarBlock): number {
+  return Math.max(0, Date.parse(block.endTime) - Date.parse(block.startTime));
+}
+
+function compareWorklogBlocks(
+  a: WorklogCalendarBlock,
+  b: WorklogCalendarBlock,
+): number {
+  const startCompare = a.startTime.localeCompare(b.startTime);
+  if (startCompare !== 0) return startCompare;
+  const sourceCompare = sourceSortRank(a) - sourceSortRank(b);
+  if (sourceCompare !== 0) return sourceCompare;
+  const endCompare = a.endTime.localeCompare(b.endTime);
+  if (endCompare !== 0) return endCompare;
+  return a.id.localeCompare(b.id);
+}
+
+function sourceSortRank(block: WorklogCalendarBlock): number {
+  if (block.source === 'user_calendar') return 0;
+  if (block.source === 'planner') return 1;
+  return 2;
 }
 
 function selectTaskBlocksForDay(

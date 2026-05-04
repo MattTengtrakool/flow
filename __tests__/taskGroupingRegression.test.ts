@@ -64,8 +64,8 @@ function captureEvent(id: string, at: string, hash: string): DomainEvent {
   };
 }
 
-function segment(): TaskSegmentView {
-  return {
+function segment(overrides: Partial<TaskSegmentView> = {}): TaskSegmentView {
+  const base: TaskSegmentView = {
     id: 'segment_1',
     lineageId: 'lineage_1',
     sessionId: 'session_1',
@@ -93,6 +93,14 @@ function segment(): TaskSegmentView {
     confidence: 0.9,
     provisional: true,
     reviewStatus: 'unreviewed',
+  };
+  return {
+    ...base,
+    ...overrides,
+    entityMemory: {
+      ...base.entityMemory,
+      ...(overrides.entityMemory ?? {}),
+    },
   };
 }
 
@@ -599,5 +607,175 @@ describe('live task grouping regression coverage', () => {
       Date.parse(worklog.blocks[0].endTime) -
         Date.parse(worklog.blocks[0].startTime),
     ).toBe(20 * 60 * 1000);
+  });
+
+  test('prefers planner rollups over overlapping live micro segments', () => {
+    const observedAt = [
+      '2026-05-03T22:53:00.000Z',
+      '2026-05-03T22:54:00.000Z',
+      '2026-05-03T22:55:00.000Z',
+      '2026-05-03T22:56:00.000Z',
+    ];
+    const taskTitles = [
+      'Google Calendar - Week of May 3, 2026',
+      'Otter Integration Bot Updates',
+      'CRM assignment webhook implementation',
+      'Mark Linnell DM',
+    ];
+    const events: DomainEvent[] = [
+      {
+        id: 'event_session_start',
+        type: 'session_started',
+        sessionId: 'session_1',
+        title: 'Session 1',
+        occurredAt: '2026-05-03T22:53:00.000Z',
+      },
+      ...observedAt.flatMap((at, index): DomainEvent[] => {
+        const observationId = `obs_${index + 1}`;
+        const segmentId = `segment_${index + 1}`;
+        const lineageId = `lineage_${index + 1}`;
+        const structured: StructuredObservation = {
+          ...baseObservation,
+          summary: `${taskTitles[index]} while checking the broader CRM assignment work.`,
+          taskHypothesis: taskTitles[index],
+          artifacts: ['Owner'],
+          entities: {
+            apps: index === 0 ? ['Google Chrome'] : ['Slack'],
+            documents: [`${taskTitles[index]}.md`],
+            tickets: index === 2 ? ['36170'] : [],
+            repos: ['owner/Owner'],
+            urls: [`https://example.test/${index + 1}`],
+            people: index === 3 ? ['Mark Linnell'] : [],
+          },
+        };
+        return [
+          captureEvent(`capture_${index + 1}`, at, `${index + 1}`.repeat(64)),
+          {
+            id: `event_${observationId}`,
+            type: 'observation_added',
+            observationId,
+            sessionId: 'session_1',
+            text: structured.summary,
+            structured,
+            occurredAt: at,
+          },
+          {
+            id: `event_${segmentId}`,
+            type: 'task_segment_started',
+            segment: segment({
+              id: segmentId,
+              lineageId,
+              startTime: at,
+              lastActiveTime: at,
+              liveTitle: taskTitles[index],
+              liveSummary: structured.summary,
+              entityMemory: {
+                apps: structured.entities.apps,
+                repos: structured.entities.repos,
+                ticketIds: structured.entities.tickets,
+                projects: [],
+                documents: structured.entities.documents,
+                people: structured.entities.people,
+                urls: structured.entities.urls,
+              },
+            }),
+            occurredAt: at,
+          },
+          {
+            id: `event_decision_${index + 1}`,
+            type: 'task_decision_recorded',
+            decisionId: `decision_${index + 1}`,
+            occurredAt: at,
+            decision: {
+              id: `decision_${index + 1}`,
+              observationId,
+              occurredAt: at,
+              decision: 'start_new',
+              targetSegmentId: segmentId,
+              targetLineageId: lineageId,
+              decisionMode: 'deterministic',
+              reasonCodes: ['no_active_segment'],
+              reasonText: 'Started a new segment.',
+              confidence: 1,
+              usedLlm: false,
+              candidateShortlist: [],
+              featureSnapshot: null,
+              stale: false,
+              errorReason: null,
+            },
+          },
+        ];
+      }),
+      {
+        id: 'event_plan',
+        type: 'task_plan_revised',
+        occurredAt: '2026-05-03T22:58:00.000Z',
+        snapshot: {
+          snapshotId: 'snapshot_1',
+          revisedAt: '2026-05-03T22:58:00.000Z',
+          windowStartAt: '2026-05-03T22:50:00.000Z',
+          windowEndAt: '2026-05-03T22:58:00.000Z',
+          sessionId: 'session_1',
+          blocks: [
+            {
+              id: 'plan_block_1',
+              startAt: '2026-05-03T22:53:00.000Z',
+              endAt: '2026-05-03T22:57:00.000Z',
+              headline: 'CRM assignment webhook implementation',
+              narrative:
+                'Grouped the calendar check, integration bot updates, CRM implementation, and related DM into the broader webhook work.',
+              label: 'worked_on',
+              category: 'coding',
+              confidence: 0.84,
+              keyActivities: [
+                'Checked calendar context',
+                'Reviewed integration bot updates',
+                'Worked on CRM assignment webhook follow-up',
+              ],
+              artifacts: {
+                apps: ['Google Chrome', 'Slack'],
+                repositories: ['owner/Owner'],
+                urls: ['https://example.test/3'],
+                tickets: ['36170'],
+                documents: ['crm_assignment_webhook.md'],
+                people: ['Mark Linnell'],
+              },
+              reasonCodes: ['multi_observation_rollup'],
+              sourceObservationIds: ['obs_1', 'obs_2', 'obs_3', 'obs_4'],
+            },
+          ],
+          model: 'test',
+          promptVersion: 'test',
+          durationMs: 1,
+          inputObservationCount: 4,
+          inputClusterCount: 1,
+          previousSnapshotId: null,
+          cause: 'manual',
+        },
+      },
+      {
+        id: 'event_session_stop',
+        type: 'session_stopped',
+        sessionId: 'session_1',
+        occurredAt: '2026-05-03T23:00:00.000Z',
+      },
+    ];
+
+    const timeline = replayEventLog(events);
+    const worklog = getDayWorklog(timeline, '2026-05-03', 'UTC');
+
+    expect(worklog.blocks).toHaveLength(1);
+    expect(worklog.blocks[0]).toMatchObject({
+      id: 'plan_block_1',
+      source: 'planner',
+      title: 'CRM assignment webhook implementation',
+      tickets: ['36170'],
+    });
+    expect(worklog.blocks.map(block => block.title)).not.toContain(
+      'Google Calendar - Week of May 3, 2026',
+    );
+    expect(
+      worklog.blocks[0].summary.provenance.supportedByObservationIds,
+    ).toEqual(['obs_1', 'obs_2', 'obs_3', 'obs_4']);
   });
 });
