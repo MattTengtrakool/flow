@@ -50,6 +50,12 @@ const flowApi: FlowElectronApi = {
     runPlannerRevision: force =>
       ipcRenderer.invoke('flow:timeline:runPlannerRevision', force),
     editBlockNotes: args => ipcRenderer.invoke('flow:timeline:editBlockNotes', args),
+    createCalendarItem: input =>
+      ipcRenderer.invoke('flow:timeline:createCalendarItem', input),
+    updateCalendarItem: args =>
+      ipcRenderer.invoke('flow:timeline:updateCalendarItem', args),
+    deleteCalendarItem: itemId =>
+      ipcRenderer.invoke('flow:timeline:deleteCalendarItem', itemId),
     addStateListener: listener => {
       const channel = 'flow:timeline:stateChanged';
       const handler = (_event: Electron.IpcRendererEvent, state: Parameters<typeof listener>[0]) => {

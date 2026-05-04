@@ -1,4 +1,8 @@
 import type {RunChatTurnArgs, RunChatTurnResult} from '../../src/chat/runChat';
+import type {
+  CalendarItemUpdate,
+  CreateCalendarItemInput,
+} from '../../src/calendar/types';
 import type {DomainEvent} from '../../src/timeline/eventLog';
 import type {TimelineView} from '../../src/timeline/eventLog';
 import type {
@@ -73,6 +77,12 @@ export type FlowElectronApi = {
       blockId: string | null;
       notes: string;
     }) => Promise<unknown>;
+    createCalendarItem: (input: CreateCalendarItemInput) => Promise<unknown>;
+    updateCalendarItem: (args: {
+      itemId: string;
+      updates: CalendarItemUpdate;
+    }) => Promise<unknown>;
+    deleteCalendarItem: (itemId: string) => Promise<unknown>;
     addStateListener: (listener: (state: TimelineStatePayload) => void) => {
       remove: () => void;
     };

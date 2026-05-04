@@ -1,10 +1,19 @@
 import {useCallback, useEffect, useMemo, useState} from 'react';
 
 import '../shared/flowApi';
+import type {
+  CalendarItemUpdate,
+  CreateCalendarItemInput,
+} from '../../src/calendar/types';
+import {
+  getAllCalendarItemBlocks,
+  getCalendarItemBlocksForDates,
+} from '../../src/calendar/selectors';
 import type {ChatMessage} from '../../src/chat/runChat';
 import {computeCostSummary} from '../../src/planner/costSummary';
 import {getAllPlanCalendarBlocks, getWorklogForDates} from '../../src/planner/selectors';
 import {computeBlockNotesKey} from '../../src/planner/types';
+import type {WorklogCalendarBlock} from '../../src/worklog/types';
 import {AppShell} from './components/AppShell';
 import {StatusBanners} from './components/StatusBanner';
 import {
@@ -23,6 +32,27 @@ import {
   TodayScreen,
 } from './screens';
 import type {CalendarView, NavKey} from './types';
+
+function mergeBlockLists(
+  first: WorklogCalendarBlock[],
+  second: WorklogCalendarBlock[],
+): WorklogCalendarBlock[] {
+  return [...first, ...second].sort((a, b) =>
+    a.startTime.localeCompare(b.startTime),
+  );
+}
+
+function mergeBlocksByDate(
+  dateIsos: string[],
+  first: Record<string, WorklogCalendarBlock[]>,
+  second: Record<string, WorklogCalendarBlock[]>,
+): Record<string, WorklogCalendarBlock[]> {
+  const result: Record<string, WorklogCalendarBlock[]> = {};
+  for (const dateIso of dateIsos) {
+    result[dateIso] = mergeBlockLists(first[dateIso] ?? [], second[dateIso] ?? []);
+  }
+  return result;
+}
 
 export function ElectronApp() {
   const timelineStore = useElectronTimeline(window.flow);
@@ -69,16 +99,44 @@ export function ElectronApp() {
 
   // Scope expensive selector re-runs to plan data changes only — not every capture event
   const planSnapshotsLength = timelineStore.timeline.planSnapshots.length;
+  const calendarItemsVersion = useMemo(
+    () =>
+      timelineStore.timeline.calendarItemOrder
+        .map(id => {
+          const item = timelineStore.timeline.calendarItemsById[id];
+          return `${id}:${item?.updatedAt ?? ''}:${item?.deletedAt ?? ''}`;
+        })
+        .join('|'),
+    [timelineStore.timeline.calendarItemOrder, timelineStore.timeline.calendarItemsById],
+  );
 
-  const blocksByDate = useMemo(
+  const planBlocksByDate = useMemo(
     () => getWorklogForDates(timelineStore.timeline, visibleDateIsos, timezone),
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [planSnapshotsLength, visibleDateIsos, timezone],
   );
-  const allBlocks = useMemo(
-    () => getAllPlanCalendarBlocks(timelineStore.timeline),
+  const calendarBlocksByDate = useMemo(
+    () =>
+      getCalendarItemBlocksForDates(
+        timelineStore.timeline,
+        visibleDateIsos,
+        timezone,
+      ),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [planSnapshotsLength],
+    [calendarItemsVersion, visibleDateIsos, timezone],
+  );
+  const blocksByDate = useMemo(
+    () => mergeBlocksByDate(visibleDateIsos, planBlocksByDate, calendarBlocksByDate),
+    [calendarBlocksByDate, planBlocksByDate, visibleDateIsos],
+  );
+  const allBlocks = useMemo(
+    () =>
+      mergeBlockLists(
+        getAllPlanCalendarBlocks(timelineStore.timeline),
+        getAllCalendarItemBlocks(timelineStore.timeline, timezone),
+      ),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [planSnapshotsLength, calendarItemsVersion, timezone],
   );
   const costSummary = useMemo(
     () => computeCostSummary(timelineStore.timeline),
@@ -145,6 +203,24 @@ export function ElectronApp() {
       notes,
     });
   }, [editableNotesKey, selectedBlock]);
+
+  const handleCreateCalendarItem = useCallback(async (input: CreateCalendarItemInput) => {
+    await window.flow?.timeline.createCalendarItem(input);
+  }, []);
+
+  const handleUpdateCalendarItem = useCallback(
+    async (itemId: string, updates: CalendarItemUpdate) => {
+      await window.flow?.timeline.updateCalendarItem({itemId, updates});
+    },
+    [],
+  );
+
+  const handleDeleteCalendarItem = useCallback(async (itemId: string) => {
+    await window.flow?.timeline.deleteCalendarItem(itemId);
+    if (selectedBlock?.calendarItemId === itemId) {
+      setSelectedBlockId(null);
+    }
+  }, [selectedBlock]);
 
   const handleSelectTodayBlock = useCallback((block: {id: string}) => {
     selectBlockForDate(block.id, todayIso);
@@ -248,6 +324,7 @@ export function ElectronApp() {
             blocksByDate={blocksByDate}
             selectedDateIso={selectedDateIso}
             selectedBlockId={selectedBlock?.id ?? null}
+            selectedBlock={selectedBlock}
             selectedDayBlocks={selectedDayBlocks}
             selectedFocusedMinutes={selectedFocusedMinutes}
             onChangeView={handleChangeCalendarView}
@@ -255,6 +332,9 @@ export function ElectronApp() {
             onToday={goToToday}
             onSelectDate={handleSelectDate}
             onSelectBlock={handleSelectCalendarBlock}
+            onCreateCalendarItem={handleCreateCalendarItem}
+            onUpdateCalendarItem={handleUpdateCalendarItem}
+            onDeleteCalendarItem={handleDeleteCalendarItem}
           />
         );
       case 'chat':

@@ -5,6 +5,11 @@ import type {
   ContextSnapshotPayload,
 } from '../types/contextCapture';
 import type {ObservationRun, StructuredObservation} from '../observation/types';
+import type {
+  CalendarItemUpdate,
+  CreateCalendarItemInput,
+  UserCalendarItem,
+} from '../calendar/types';
 
 const REDACTED = '[redacted]';
 
@@ -148,4 +153,50 @@ export function sanitizeObservationRun(run: ObservationRun): ObservationRun {
 
 export function sanitizeObservationSummary(summary: string): string {
   return redactSensitiveText(summary) ?? REDACTED;
+}
+
+function sanitizeCalendarText(value: string | null | undefined): string {
+  return redactSensitiveText(value) ?? '';
+}
+
+export function sanitizeCalendarItem(
+  item: UserCalendarItem,
+): UserCalendarItem {
+  return {
+    ...item,
+    title: sanitizeCalendarText(item.title),
+    description: sanitizeCalendarText(item.description),
+    location: sanitizeCalendarText(item.location),
+  };
+}
+
+export function sanitizeCreateCalendarItemInput(
+  input: CreateCalendarItemInput,
+): CreateCalendarItemInput {
+  return {
+    ...input,
+    title: sanitizeCalendarText(input.title),
+    description: sanitizeCalendarText(input.description),
+    location: sanitizeCalendarText(input.location),
+  };
+}
+
+export function sanitizeCalendarItemUpdate(
+  update: CalendarItemUpdate,
+): CalendarItemUpdate {
+  return {
+    ...update,
+    title:
+      update.title === undefined
+        ? undefined
+        : sanitizeCalendarText(update.title),
+    description:
+      update.description === undefined
+        ? undefined
+        : sanitizeCalendarText(update.description),
+    location:
+      update.location === undefined
+        ? undefined
+        : sanitizeCalendarText(update.location),
+  };
 }

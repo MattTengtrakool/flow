@@ -1,11 +1,17 @@
 import {memo, useEffect, useState} from 'react';
-import type {CSSProperties} from 'react';
+import type {CSSProperties, FormEvent} from 'react';
 
+import type {
+  CalendarItemKind,
+  CalendarItemUpdate,
+  CreateCalendarItemInput,
+} from '../../../src/calendar/types';
 import type {WorklogCalendarBlock} from '../../../src/worklog/types';
 import {
   dateFromIso,
   focusedMinutes,
   mondayOfIso,
+  toDateIso,
   type CalendarView,
 } from '../dateUtils';
 import {Screen} from '../components/common';
@@ -15,7 +21,39 @@ const GRID_START_MINUTES = HOURS[0] * 60;
 const GRID_END_MINUTES = (HOURS[HOURS.length - 1] + 1) * 60;
 const GRID_TOTAL_MINUTES = GRID_END_MINUTES - GRID_START_MINUTES;
 
-// Precompute hour labels once — avoids creating Date + Intl formatter on every render
+type RepeatOption =
+  | 'none'
+  | 'daily'
+  | 'weekly'
+  | 'weekdays'
+  | 'monthly'
+  | 'yearly';
+
+type EditorMode = 'closed' | 'create' | 'edit';
+
+type CalendarEditorState = {
+  kind: CalendarItemKind;
+  title: string;
+  dateIso: string;
+  startTime: string;
+  endTime: string;
+  description: string;
+  location: string;
+  repeat: RepeatOption;
+  repeatDaysOfWeek: number[];
+  repeatUntil: string;
+};
+
+const REPEAT_OPTIONS: Array<{value: RepeatOption; label: string}> = [
+  {value: 'none', label: 'Does not repeat'},
+  {value: 'daily', label: 'Daily'},
+  {value: 'weekly', label: 'Weekly'},
+  {value: 'weekdays', label: 'Every weekday'},
+  {value: 'monthly', label: 'Monthly'},
+  {value: 'yearly', label: 'Yearly'},
+];
+
+// Precompute hour labels once to avoid creating Date + Intl formatter on every render.
 const hourFormatter = new Intl.DateTimeFormat([], {hour: 'numeric'});
 const HOUR_LABELS: Record<number, string> = {};
 for (const h of HOURS) {
@@ -85,6 +123,127 @@ function useCurrentMinutes() {
   return minutes;
 }
 
+function twoDigit(value: number): string {
+  return String(value).padStart(2, '0');
+}
+
+function timeInputValue(date: Date): string {
+  return `${twoDigit(date.getHours())}:${twoDigit(date.getMinutes())}`;
+}
+
+function defaultEditorState(dateIso: string): CalendarEditorState {
+  const now = new Date();
+  const start = dateFromIso(dateIso);
+  if (dateIso === toDateIso(now)) {
+    start.setHours(Math.min(20, now.getHours() + 1), 0, 0, 0);
+  } else {
+    start.setHours(9, 0, 0, 0);
+  }
+  const end = new Date(start.getTime() + 60 * 60 * 1000);
+  return {
+    kind: 'event',
+    title: '',
+    dateIso,
+    startTime: timeInputValue(start),
+    endTime: timeInputValue(end),
+    description: '',
+    location: '',
+    repeat: 'none',
+    repeatDaysOfWeek: [],
+    repeatUntil: '',
+  };
+}
+
+function repeatOptionFromBlock(block: WorklogCalendarBlock): RepeatOption {
+  const recurrence = block.calendarItemRecurrence;
+  if (recurrence == null) return 'none';
+  if (
+    recurrence.frequency === 'weekly' &&
+    recurrence.daysOfWeek?.length === 5 &&
+    [1, 2, 3, 4, 5].every(day => recurrence.daysOfWeek?.includes(day))
+  ) {
+    return 'weekdays';
+  }
+  return recurrence.frequency;
+}
+
+function editorStateFromBlock(block: WorklogCalendarBlock): CalendarEditorState {
+  const start = new Date(block.startTime);
+  const end = new Date(block.endTime);
+  return {
+    kind: block.calendarItemKind ?? 'event',
+    title: block.title,
+    dateIso: toDateIso(start),
+    startTime: timeInputValue(start),
+    endTime: timeInputValue(end),
+    description: block.notes ?? block.summary.narrative ?? '',
+    location: block.calendarItemLocation ?? '',
+    repeat: repeatOptionFromBlock(block),
+    repeatDaysOfWeek: block.calendarItemRecurrence?.daysOfWeek ?? [],
+    repeatUntil: block.calendarItemRecurrence?.until ?? '',
+  };
+}
+
+function localDateTimeIso(dateIso: string, timeValue: string): string {
+  const safeDateIso = /^\d{4}-\d{2}-\d{2}$/.test(dateIso)
+    ? dateIso
+    : toDateIso(new Date());
+  const safeTimeValue = /^\d{2}:\d{2}$/.test(timeValue) ? timeValue : '09:00';
+  return new Date(`${safeDateIso}T${safeTimeValue}:00`).toISOString();
+}
+
+function weekdayForDate(dateIso: string): number {
+  return dateFromIso(dateIso).getDay();
+}
+
+function recurrenceForState(state: CalendarEditorState): CreateCalendarItemInput['recurrence'] {
+  if (state.repeat === 'none') return null;
+  const until = state.repeatUntil.trim().length > 0 ? state.repeatUntil : null;
+  if (state.repeat === 'weekdays') {
+    return {
+      frequency: 'weekly',
+      interval: 1,
+      daysOfWeek: [1, 2, 3, 4, 5],
+      until,
+    };
+  }
+  return {
+    frequency: state.repeat,
+    interval: 1,
+    daysOfWeek:
+      state.repeat === 'weekly'
+        ? state.repeatDaysOfWeek.length > 0
+          ? state.repeatDaysOfWeek
+          : [weekdayForDate(state.dateIso)]
+        : undefined,
+    until,
+  };
+}
+
+function inputFromEditorState(state: CalendarEditorState): CreateCalendarItemInput {
+  const startAt = localDateTimeIso(state.dateIso, state.startTime);
+  const parsedStart = Date.parse(startAt);
+  const parsedEnd = Date.parse(localDateTimeIso(state.dateIso, state.endTime));
+  const endAt =
+    Number.isFinite(parsedEnd) && parsedEnd > parsedStart
+      ? new Date(parsedEnd).toISOString()
+      : new Date(parsedStart + 60 * 60 * 1000).toISOString();
+
+  return {
+    kind: state.kind,
+    title: state.title.trim(),
+    description: state.description.trim(),
+    location: state.location.trim(),
+    startAt,
+    endAt,
+    recurrence: recurrenceForState(state),
+  };
+}
+
+function isUserCalendarBlock(block: WorklogCalendarBlock | null): boolean {
+  return block?.source === 'user_calendar' && block.calendarItemId != null;
+}
+
 export const CalendarScreen = memo(function CalendarScreen(props: {
   view: CalendarView;
   anchorIso: string;
@@ -92,6 +251,7 @@ export const CalendarScreen = memo(function CalendarScreen(props: {
   blocksByDate: Record<string, WorklogCalendarBlock[]>;
   selectedDateIso: string;
   selectedBlockId: string | null;
+  selectedBlock: WorklogCalendarBlock | null;
   selectedDayBlocks: WorklogCalendarBlock[];
   selectedFocusedMinutes: number;
   onChangeView: (view: CalendarView) => void;
@@ -99,12 +259,71 @@ export const CalendarScreen = memo(function CalendarScreen(props: {
   onToday: () => void;
   onSelectDate: (dateIso: string) => void;
   onSelectBlock: (block: WorklogCalendarBlock, dateIso?: string) => void;
+  onCreateCalendarItem: (input: CreateCalendarItemInput) => Promise<void>;
+  onUpdateCalendarItem: (
+    itemId: string,
+    updates: CalendarItemUpdate,
+  ) => Promise<void>;
+  onDeleteCalendarItem: (itemId: string) => Promise<void>;
 }) {
   const currentMinutes = useCurrentMinutes();
+  const [editorMode, setEditorMode] = useState<EditorMode>('closed');
+  const [editorState, setEditorState] = useState(() =>
+    defaultEditorState(props.selectedDateIso),
+  );
+  const [editorError, setEditorError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (editorMode === 'create') {
+      setEditorState(defaultEditorState(props.selectedDateIso));
+    }
+  }, [editorMode, props.selectedDateIso]);
+
+  const selectedIsUserCalendarBlock = isUserCalendarBlock(props.selectedBlock);
 
   function timeNowStyle(): CSSProperties {
     const clamped = Math.max(GRID_START_MINUTES, Math.min(GRID_END_MINUTES, currentMinutes));
     return {top: `${((clamped - GRID_START_MINUTES) / GRID_TOTAL_MINUTES) * 100}%`};
+  }
+
+  function startCreate() {
+    setEditorError(null);
+    setEditorState(defaultEditorState(props.selectedDateIso));
+    setEditorMode('create');
+  }
+
+  function startEdit() {
+    if (!selectedIsUserCalendarBlock || props.selectedBlock == null) return;
+    setEditorError(null);
+    setEditorState(editorStateFromBlock(props.selectedBlock));
+    setEditorMode('edit');
+  }
+
+  async function deleteSelectedItem() {
+    const itemId = props.selectedBlock?.calendarItemId;
+    if (itemId == null) return;
+    const confirmed = window.confirm('Delete this item and all repeats?');
+    if (!confirmed) return;
+    await props.onDeleteCalendarItem(itemId);
+    setEditorMode('closed');
+  }
+
+  async function submitEditor(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const input = inputFromEditorState(editorState);
+    if (input.title.trim().length === 0) {
+      setEditorError('Add a title before saving.');
+      return;
+    }
+    setEditorError(null);
+    if (editorMode === 'edit') {
+      const itemId = props.selectedBlock?.calendarItemId;
+      if (itemId == null) return;
+      await props.onUpdateCalendarItem(itemId, input);
+    } else {
+      await props.onCreateCalendarItem(input);
+    }
+    setEditorMode('closed');
   }
 
   return (
@@ -129,6 +348,19 @@ export const CalendarScreen = memo(function CalendarScreen(props: {
         <button type="button" onClick={props.onToday}>
           Today
         </button>
+        <button type="button" onClick={startCreate}>
+          New
+        </button>
+        {selectedIsUserCalendarBlock ? (
+          <>
+            <button type="button" onClick={startEdit}>
+              Edit
+            </button>
+            <button type="button" onClick={deleteSelectedItem}>
+              Delete
+            </button>
+          </>
+        ) : null}
         <div className="segmented-control">
           {(['month', 'week', 'day'] as CalendarView[]).map(view => (
             <button
@@ -141,6 +373,169 @@ export const CalendarScreen = memo(function CalendarScreen(props: {
           ))}
         </div>
       </div>
+
+      {editorMode !== 'closed' ? (
+        <form className="calendar-editor" onSubmit={submitEditor}>
+          <div className="calendar-editor__topline">
+            <div className="segmented-control" aria-label="Calendar item type">
+              {(['event', 'task'] as CalendarItemKind[]).map(kind => (
+                <button
+                  key={kind}
+                  type="button"
+                  className={editorState.kind === kind ? 'active' : ''}
+                  onClick={() =>
+                    setEditorState(previous => ({
+                      ...previous,
+                      kind,
+                    }))
+                  }>
+                  {kind}
+                </button>
+              ))}
+            </div>
+            <span>{editorMode === 'edit' ? 'Edit item' : 'New item'}</span>
+          </div>
+
+          <label className="form-field calendar-editor__title">
+            <span>Title</span>
+            <input
+              value={editorState.title}
+              onChange={event =>
+                setEditorState(previous => ({
+                  ...previous,
+                  title: event.target.value,
+                }))
+              }
+              placeholder={editorState.kind === 'task' ? 'Task name' : 'Event name'}
+            />
+          </label>
+
+          <div className="calendar-editor__grid">
+            <label className="form-field">
+              <span>Date</span>
+              <input
+                type="date"
+                value={editorState.dateIso}
+                onChange={event =>
+                  setEditorState(previous => ({
+                    ...previous,
+                    dateIso: event.target.value,
+                    repeatDaysOfWeek:
+                      previous.repeat === 'weekly' && previous.repeatDaysOfWeek.length <= 1
+                        ? [weekdayForDate(event.target.value)]
+                        : previous.repeatDaysOfWeek,
+                  }))
+                }
+              />
+            </label>
+            <label className="form-field">
+              <span>Start</span>
+              <input
+                type="time"
+                value={editorState.startTime}
+                onChange={event =>
+                  setEditorState(previous => ({
+                    ...previous,
+                    startTime: event.target.value,
+                  }))
+                }
+              />
+            </label>
+            <label className="form-field">
+              <span>End</span>
+              <input
+                type="time"
+                value={editorState.endTime}
+                onChange={event =>
+                  setEditorState(previous => ({
+                    ...previous,
+                    endTime: event.target.value,
+                  }))
+                }
+              />
+            </label>
+            <label className="form-field">
+              <span>Repeat</span>
+              <select
+                value={editorState.repeat}
+                onChange={event =>
+                  setEditorState(previous => ({
+                    ...previous,
+                    repeat: event.target.value as RepeatOption,
+                    repeatDaysOfWeek:
+                      event.target.value === 'weekly'
+                        ? previous.repeatDaysOfWeek.length > 0
+                          ? previous.repeatDaysOfWeek
+                          : [weekdayForDate(previous.dateIso)]
+                        : [],
+                  }))
+                }>
+                {REPEAT_OPTIONS.map(option => (
+                  <option key={option.value} value={option.value}>
+                    {option.label}
+                  </option>
+                ))}
+              </select>
+            </label>
+            {editorState.repeat !== 'none' ? (
+              <label className="form-field">
+                <span>Ends</span>
+                <input
+                  type="date"
+                  value={editorState.repeatUntil}
+                  onChange={event =>
+                    setEditorState(previous => ({
+                      ...previous,
+                      repeatUntil: event.target.value,
+                    }))
+                  }
+                />
+              </label>
+            ) : null}
+            {editorState.kind === 'event' ? (
+              <label className="form-field">
+                <span>Location</span>
+                <input
+                  value={editorState.location}
+                  onChange={event =>
+                    setEditorState(previous => ({
+                      ...previous,
+                      location: event.target.value,
+                    }))
+                  }
+                  placeholder="Optional"
+                />
+              </label>
+            ) : null}
+          </div>
+
+          <label className="form-field">
+            <span>Description</span>
+            <textarea
+              rows={3}
+              value={editorState.description}
+              onChange={event =>
+                setEditorState(previous => ({
+                  ...previous,
+                  description: event.target.value,
+                }))
+              }
+              placeholder="Optional"
+            />
+          </label>
+
+          {editorError != null ? <p className="calendar-editor__error">{editorError}</p> : null}
+
+          <div className="action-row">
+            <button type="submit">
+              {editorMode === 'edit' ? 'Save changes' : 'Create'}
+            </button>
+            <button type="button" onClick={() => setEditorMode('closed')}>
+              Cancel
+            </button>
+          </div>
+        </form>
+      ) : null}
 
       {props.view === 'month' ? (
         <div className="month-grid">
@@ -202,8 +597,10 @@ export const CalendarScreen = memo(function CalendarScreen(props: {
                 key={dateIso}
                 className={dateIso === props.selectedDateIso ? 'time-day active' : 'time-day'}>
                 <header>
-                  <strong>{dateIso.slice(5)}</strong>
-                  <span>{focusedMinutes(blocks)}m</span>
+                  <button type="button" onClick={() => props.onSelectDate(dateIso)}>
+                    <strong>{dateIso.slice(5)}</strong>
+                    <span>{focusedMinutes(blocks)}m</span>
+                  </button>
                 </header>
                 <div className="time-day__canvas">
                   {HOURS.map(hour => (

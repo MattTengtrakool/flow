@@ -1,3 +1,5 @@
+import type {CalendarRecurrenceRule} from '../calendar/types';
+
 export type WorklogLabel =
   | 'worked_on'
   | 'reviewed'
@@ -39,6 +41,12 @@ export type WorklogCalendarBlock = {
   urls?: string[];
   notes?: string;
   notesKey?: string;
+  source?: 'planner' | 'user_calendar';
+  calendarItemId?: string;
+  calendarItemKind?: 'event' | 'task';
+  calendarItemRecurrence?: CalendarRecurrenceRule | null;
+  calendarItemRecurrenceLabel?: string | null;
+  calendarItemLocation?: string;
   continuityLinkage: {
     resumedFromLineageId: string | null;
     resumedSegmentCount: number;

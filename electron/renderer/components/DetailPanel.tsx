@@ -17,6 +17,7 @@ export const DetailPanel = memo(function DetailPanel(props: {
 
   const block = props.selectedBlock;
   if (block == null) return null;
+  const isUserCalendarBlock = block.source === 'user_calendar';
 
   return (
     <aside className="detail-panel">
@@ -34,19 +35,44 @@ export const DetailPanel = memo(function DetailPanel(props: {
           placeholder="Add notes…"
         />
       </div>
-      <SmallList label="Repos" values={block.repos} />
-      <SmallList label="Tickets" values={block.tickets} />
-      <SmallList label="Apps" values={block.apps} />
-      <SmallList label="Documents" values={block.documents} />
-      <SmallList label="URLs" values={block.urls ?? []} />
-      <SmallList label="People" values={block.people ?? []} />
-      <SmallList label="Key activities" values={block.keyActivities ?? []} />
-      <SmallList label="Reason codes" values={block.reasonCodes} />
-      <SmallList label="Evidence" values={props.selectedObservationIds} />
-      <div className="small-list">
-        <strong>Confidence</strong>
-        <span>{Math.round(block.confidence * 100)}%</span>
-      </div>
+      {isUserCalendarBlock ? (
+        <>
+          <SmallList label="Type" values={[block.calendarItemKind ?? 'event']} />
+          <SmallList
+            label="Repeats"
+            values={
+              block.calendarItemRecurrenceLabel != null
+                ? [block.calendarItemRecurrenceLabel]
+                : []
+            }
+          />
+          <SmallList
+            label="Location"
+            values={
+              block.calendarItemLocation != null &&
+              block.calendarItemLocation.trim().length > 0
+                ? [block.calendarItemLocation]
+                : []
+            }
+          />
+        </>
+      ) : (
+        <>
+          <SmallList label="Repos" values={block.repos} />
+          <SmallList label="Tickets" values={block.tickets} />
+          <SmallList label="Apps" values={block.apps} />
+          <SmallList label="Documents" values={block.documents} />
+          <SmallList label="URLs" values={block.urls ?? []} />
+          <SmallList label="People" values={block.people ?? []} />
+          <SmallList label="Key activities" values={block.keyActivities ?? []} />
+          <SmallList label="Reason codes" values={block.reasonCodes} />
+          <SmallList label="Evidence" values={props.selectedObservationIds} />
+          <div className="small-list">
+            <strong>Confidence</strong>
+            <span>{Math.round(block.confidence * 100)}%</span>
+          </div>
+        </>
+      )}
     </aside>
   );
 });

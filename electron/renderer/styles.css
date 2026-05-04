@@ -128,7 +128,7 @@ p {
   line-height: 1.55;
 }
 
-button, input, textarea { font: inherit; }
+button, input, textarea, select { font: inherit; }
 
 button {
   cursor: pointer;
@@ -148,7 +148,8 @@ button:disabled {
 
 button:focus-visible,
 textarea:focus-visible,
-input:focus-visible {
+input:focus-visible,
+select:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 2px;
 }
@@ -659,6 +660,79 @@ input:focus-visible {
   border-color: var(--border-strong);
 }
 
+/* ─── Calendar editor ───────────────────────────────────────── */
+.calendar-editor {
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-sm);
+  display: grid;
+  gap: 13px;
+  padding: 16px;
+}
+
+.calendar-editor__topline {
+  align-items: center;
+  display: flex;
+  gap: 12px;
+  justify-content: space-between;
+}
+
+.calendar-editor__topline > span {
+  color: var(--text-faint);
+  font-size: 11px;
+  font-weight: 720;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+}
+
+.calendar-editor__grid {
+  display: grid;
+  gap: 10px;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.calendar-editor__title {
+  max-width: none;
+}
+
+.calendar-editor__error {
+  color: var(--danger);
+  font-size: 12.5px;
+  font-weight: 560;
+}
+
+.form-field {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+}
+
+.form-field span {
+  color: var(--text-faint);
+  font-size: 10.5px;
+  font-weight: 720;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+}
+
+.form-field input,
+.form-field select,
+.form-field textarea {
+  background: var(--bg-input);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--text);
+  min-width: 0;
+  padding: 8px 10px;
+  width: 100%;
+}
+
+.form-field textarea {
+  line-height: 1.45;
+  resize: vertical;
+}
+
 /* ─── Month grid ─────────────────────────────────────────────── */
 .month-grid {
   background: var(--bg-elevated);
@@ -820,7 +894,23 @@ input:focus-visible {
   border-bottom: 1px solid var(--border);
   display: flex;
   justify-content: space-between;
+  padding: 0;
+}
+
+.time-day header button {
+  align-items: center;
+  background: transparent;
+  border: 0;
+  color: inherit;
+  display: flex;
+  justify-content: space-between;
   padding: 9px 12px;
+  text-align: left;
+  width: 100%;
+}
+
+.time-day header button:hover {
+  background: var(--bg-hover);
 }
 
 .time-day header strong {
@@ -1065,6 +1155,24 @@ input:focus-visible {
   background: #e7f5ed;
   border-color: rgba(27, 122, 66, 0.15);
   border-left-color: #1b7a42;
+}
+
+.category-event .block-card__stripe,
+.time-block.category-event { border-left-color: #c96a32; }
+.category-event .block-card__stripe { background: #c96a32; }
+.calendar-pill.category-event,
+.time-block.category-event {
+  background: #fff3e8;
+  border-color: rgba(201, 106, 50, 0.18);
+}
+
+.category-task .block-card__stripe,
+.time-block.category-task { border-left-color: #2f7a65; }
+.category-task .block-card__stripe { background: #2f7a65; }
+.calendar-pill.category-task,
+.time-block.category-task {
+  background: #e5f6f1;
+  border-color: rgba(47, 122, 101, 0.16);
 }
 
 /* ─── Chips ─────────────────────────────────────────────────── */
@@ -1663,4 +1771,5 @@ input:focus-visible {
   .capture-footer { display: none; }
   .content { padding: 16px; }
   .hero-panel { grid-template-columns: 1fr; }
+  .calendar-editor__grid { grid-template-columns: 1fr; }
 }

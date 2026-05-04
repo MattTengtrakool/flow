@@ -11,6 +11,10 @@ import type {
   TaskPlanRevisionFailure,
   TaskPlanSnapshot,
 } from '../planner/types';
+import type {
+  CalendarItemUpdate,
+  UserCalendarItem,
+} from '../calendar/types';
 
 export type EventBase = {
   id: string;
@@ -84,6 +88,22 @@ export type UserBlockNotesEditedEvent = EventBase & {
   notes: string;
 };
 
+export type CalendarItemCreatedEvent = EventBase & {
+  type: 'calendar_item_created';
+  item: UserCalendarItem;
+};
+
+export type CalendarItemUpdatedEvent = EventBase & {
+  type: 'calendar_item_updated';
+  itemId: string;
+  updates: CalendarItemUpdate;
+};
+
+export type CalendarItemDeletedEvent = EventBase & {
+  type: 'calendar_item_deleted';
+  itemId: string;
+};
+
 export type DomainEvent =
   | SessionStartedEvent
   | SessionStoppedEvent
@@ -95,7 +115,10 @@ export type DomainEvent =
   | CapturePerformedEvent
   | TaskPlanRevisedEvent
   | TaskPlanRevisionFailedEvent
-  | UserBlockNotesEditedEvent;
+  | UserBlockNotesEditedEvent
+  | CalendarItemCreatedEvent
+  | CalendarItemUpdatedEvent
+  | CalendarItemDeletedEvent;
 
 export type SessionView = {
   id: string;
@@ -149,6 +172,8 @@ export type TimelineView = {
     string,
     {notes: string; editedAt: string; lastBlockId: string | null}
   >;
+  calendarItemsById: Record<string, UserCalendarItem>;
+  calendarItemOrder: string[];
   currentSessionId: string | null;
   currentContextSnapshotId: string | null;
   latestCaptureInspectionId: string | null;
@@ -178,6 +203,8 @@ export function createEmptyTimeline(): TimelineView {
     planSnapshots: [],
     lastPlanRevisionFailure: null,
     userBlockNotes: {},
+    calendarItemsById: {},
+    calendarItemOrder: [],
     currentSessionId: null,
     currentContextSnapshotId: null,
     latestCaptureInspectionId: null,
@@ -214,6 +241,22 @@ function cloneTimeline(timeline: TimelineView): TimelineView {
     captureRecordOrder: timeline.captureRecordOrder.slice(),
     planSnapshots: timeline.planSnapshots.slice(),
     userBlockNotes: {...timeline.userBlockNotes},
+    calendarItemsById: Object.fromEntries(
+      Object.entries(timeline.calendarItemsById).map(([id, item]) => [
+        id,
+        {
+          ...item,
+          recurrence:
+            item.recurrence == null
+              ? null
+              : {
+                  ...item.recurrence,
+                  daysOfWeek: item.recurrence.daysOfWeek?.slice(),
+                },
+        },
+      ]),
+    ),
+    calendarItemOrder: timeline.calendarItemOrder.slice(),
   };
 }
 
@@ -343,6 +386,56 @@ export function applyEventInPlace(timeline: TimelineView, event: DomainEvent) {
           notes: event.notes,
           editedAt: event.occurredAt,
           lastBlockId: event.blockId,
+        };
+      }
+      break;
+    }
+
+    case 'calendar_item_created': {
+      timeline.calendarItemsById[event.item.id] = {
+        ...event.item,
+        recurrence:
+          event.item.recurrence == null
+            ? null
+            : {
+                ...event.item.recurrence,
+                daysOfWeek: event.item.recurrence.daysOfWeek?.slice(),
+              },
+      };
+      if (!timeline.calendarItemOrder.includes(event.item.id)) {
+        timeline.calendarItemOrder.push(event.item.id);
+      }
+      break;
+    }
+
+    case 'calendar_item_updated': {
+      const item = timeline.calendarItemsById[event.itemId];
+      if (item != null && item.deletedAt == null) {
+        timeline.calendarItemsById[event.itemId] = {
+          ...item,
+          ...event.updates,
+          recurrence:
+            event.updates.recurrence === undefined
+              ? item.recurrence
+              : event.updates.recurrence == null
+                ? null
+                : {
+                    ...event.updates.recurrence,
+                    daysOfWeek: event.updates.recurrence.daysOfWeek?.slice(),
+                  },
+          updatedAt: event.occurredAt,
+        };
+      }
+      break;
+    }
+
+    case 'calendar_item_deleted': {
+      const item = timeline.calendarItemsById[event.itemId];
+      if (item != null) {
+        timeline.calendarItemsById[event.itemId] = {
+          ...item,
+          deletedAt: event.occurredAt,
+          updatedAt: event.occurredAt,
         };
       }
       break;

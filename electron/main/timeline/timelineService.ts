@@ -1,9 +1,18 @@
 import {BrowserWindow, ipcMain} from 'electron';
 
+import type {
+  CalendarItemUpdate,
+  CalendarRecurrenceRule,
+  CreateCalendarItemInput,
+  UserCalendarItem,
+} from '../../../src/calendar/types';
 import {generateStructuredObservationForCapture} from '../../../src/observation/runObservationForCapture';
 import {PLANNER_CONFIG} from '../../../src/planner/config';
 import {runPlannerRevision} from '../../../src/planner/revisionEngine';
 import {
+  sanitizeCalendarItem,
+  sanitizeCalendarItemUpdate,
+  sanitizeCreateCalendarItemInput,
   sanitizeCaptureMetadata,
   sanitizeContextSnapshot,
   sanitizeInspection,
@@ -27,6 +36,13 @@ import {loadEventLog, saveEventLog} from '../storage/eventLogStorage';
 
 const EVENT_LOG_SAVE_DEBOUNCE_MS = 500;
 const CONTINUOUS_CAPTURE_INTERVAL_MS = 1000;
+const DEFAULT_CALENDAR_ITEM_DURATION_MS = 60 * 60 * 1000;
+const VALID_RECURRENCE_FREQUENCIES = new Set([
+  'daily',
+  'weekly',
+  'monthly',
+  'yearly',
+]);
 
 type TimelineStatePayload = {
   eventLogLength: number;
@@ -38,6 +54,88 @@ type TimelineStatePayload = {
   captureStatusMessage: string;
   plannerInFlight: boolean;
 };
+
+function trimCalendarText(value: unknown): string {
+  return typeof value === 'string' ? value.trim() : '';
+}
+
+function normalizeDateTime(value: unknown, fallbackMs: number): string {
+  if (typeof value !== 'string') return new Date(fallbackMs).toISOString();
+  const ms = Date.parse(value);
+  return Number.isFinite(ms)
+    ? new Date(ms).toISOString()
+    : new Date(fallbackMs).toISOString();
+}
+
+function normalizeUntilDate(value: unknown): string | null {
+  if (typeof value !== 'string' || value.trim().length === 0) return null;
+  const trimmed = value.trim();
+  return /^\d{4}-\d{2}-\d{2}$/.test(trimmed) ? trimmed : null;
+}
+
+function normalizeRecurrence(
+  recurrence: CreateCalendarItemInput['recurrence'] | undefined,
+): CalendarRecurrenceRule | null {
+  if (recurrence == null) return null;
+  if (!VALID_RECURRENCE_FREQUENCIES.has(recurrence.frequency)) return null;
+  const interval = Math.max(1, Math.floor(recurrence.interval || 1));
+  const daysOfWeek = Array.isArray(recurrence.daysOfWeek)
+    ? Array.from(
+        new Set(
+          recurrence.daysOfWeek
+            .map(day => Math.floor(day))
+            .filter(day => day >= 0 && day <= 6),
+        ),
+      ).sort((a, b) => a - b)
+    : undefined;
+
+  return {
+    frequency: recurrence.frequency,
+    interval,
+    daysOfWeek:
+      recurrence.frequency === 'weekly' && daysOfWeek != null && daysOfWeek.length > 0
+        ? daysOfWeek
+        : undefined,
+    until: normalizeUntilDate(recurrence.until),
+  };
+}
+
+function normalizeCreateCalendarItemInput(
+  input: CreateCalendarItemInput,
+): CreateCalendarItemInput {
+  const startAt = normalizeDateTime(input.startAt, Date.now());
+  const startMs = Date.parse(startAt);
+  const parsedEndMs = Date.parse(input.endAt);
+  const endAt =
+    Number.isFinite(parsedEndMs) && parsedEndMs > startMs
+      ? new Date(parsedEndMs).toISOString()
+      : new Date(startMs + DEFAULT_CALENDAR_ITEM_DURATION_MS).toISOString();
+  const kind = input.kind === 'task' ? 'task' : 'event';
+  const fallbackTitle = kind === 'task' ? 'Untitled task' : 'Untitled event';
+  const title = trimCalendarText(input.title) || fallbackTitle;
+
+  return {
+    kind,
+    title,
+    description: trimCalendarText(input.description),
+    location: trimCalendarText(input.location),
+    startAt,
+    endAt,
+    recurrence: normalizeRecurrence(input.recurrence),
+  };
+}
+
+function createInputFromItem(item: UserCalendarItem): CreateCalendarItemInput {
+  return {
+    kind: item.kind,
+    title: item.title,
+    description: item.description,
+    location: item.location,
+    startAt: item.startAt,
+    endAt: item.endAt,
+    recurrence: item.recurrence,
+  };
+}
 
 class ElectronTimelineService {
   private eventLog: DomainEvent[] = [];
@@ -366,6 +464,62 @@ class ElectronTimelineService {
     ]);
     return this.snapshot();
   }
+
+  createCalendarItem(input: CreateCalendarItemInput) {
+    const occurredAt = createOccurredAt();
+    const normalized = sanitizeCreateCalendarItemInput(
+      normalizeCreateCalendarItemInput(input),
+    );
+    const item = sanitizeCalendarItem({
+      id: createDomainId('calendar_item'),
+      ...normalized,
+      createdAt: occurredAt,
+      updatedAt: occurredAt,
+    });
+    this.appendEvents([
+      {
+        id: createDomainId('event'),
+        type: 'calendar_item_created',
+        item,
+        occurredAt,
+      },
+    ]);
+    return this.snapshot();
+  }
+
+  updateCalendarItem(args: {itemId: string; updates: CalendarItemUpdate}) {
+    const current = this.timeline.calendarItemsById[args.itemId];
+    if (current == null || current.deletedAt != null) return this.snapshot();
+
+    const normalized = normalizeCreateCalendarItemInput({
+      ...createInputFromItem(current),
+      ...args.updates,
+    });
+    const updates = sanitizeCalendarItemUpdate(normalized);
+    this.appendEvents([
+      {
+        id: createDomainId('event'),
+        type: 'calendar_item_updated',
+        itemId: args.itemId,
+        updates,
+        occurredAt: createOccurredAt(),
+      },
+    ]);
+    return this.snapshot();
+  }
+
+  deleteCalendarItem(itemId: string) {
+    if (this.timeline.calendarItemsById[itemId] == null) return this.snapshot();
+    this.appendEvents([
+      {
+        id: createDomainId('event'),
+        type: 'calendar_item_deleted',
+        itemId,
+        occurredAt: createOccurredAt(),
+      },
+    ]);
+    return this.snapshot();
+  }
 }
 
 export const timelineService = new ElectronTimelineService();
@@ -380,5 +534,14 @@ export function registerTimelineIpcHandlers() {
   );
   ipcMain.handle('flow:timeline:editBlockNotes', (_event, args) =>
     timelineService.editBlockNotes(args),
+  );
+  ipcMain.handle('flow:timeline:createCalendarItem', (_event, input) =>
+    timelineService.createCalendarItem(input),
+  );
+  ipcMain.handle('flow:timeline:updateCalendarItem', (_event, args) =>
+    timelineService.updateCalendarItem(args),
+  );
+  ipcMain.handle('flow:timeline:deleteCalendarItem', (_event, itemId) =>
+    timelineService.deleteCalendarItem(itemId),
   );
 }

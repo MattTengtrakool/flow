@@ -148,6 +148,7 @@ export function mapBlockToWorklogCalendarBlock(
     urls: block.artifacts.urls,
     notes: block.notes,
     notesKey: computeBlockNotesKey(block.sourceObservationIds),
+    source: 'planner',
     continuityLinkage: {
       resumedFromLineageId: null,
       resumedSegmentCount: 0,
