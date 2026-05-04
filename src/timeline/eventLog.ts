@@ -12,7 +12,7 @@ import type {
   AudioRecordingView,
   AudioTranscriptView,
 } from '../audio/types';
-import type {MeetingCandidateView} from '../meeting/types';
+import type { MeetingCandidateView } from '../meeting/types';
 import type {
   TaskPlanRevisionFailure,
   TaskPlanSnapshot,
@@ -28,10 +28,7 @@ import type {
   MeetingSummary,
   MeetingTranscriptChunk,
 } from '../meetings/types';
-import type {
-  CalendarItemUpdate,
-  UserCalendarItem,
-} from '../calendar/types';
+import type { CalendarItemUpdate, UserCalendarItem } from '../calendar/types';
 import type {
   PendingObservationView,
   TaskDecisionView,
@@ -277,20 +274,24 @@ export type AudioTranscriptGeneratedEvent = EventBase & {
   transcript: AudioTranscriptView;
 };
 
+export type LegacyAudioMeetingSummaryGeneratedEvent = EventBase & {
+  type: 'meeting_summary_generated';
+  meetingId: string;
+  recordingId: string | null;
+  generatedAt: string;
+  title: string;
+  summary: string;
+  actionItems: string[];
+};
+
+export type MeetingAssistantSummaryGeneratedEvent = EventBase & {
+  type: 'meeting_summary_generated';
+  summary: MeetingSummary;
+};
+
 export type MeetingSummaryGeneratedEvent =
-  | (EventBase & {
-      type: 'meeting_summary_generated';
-      meetingId: string;
-      recordingId: string | null;
-      generatedAt: string;
-      title: string;
-      summary: string;
-      actionItems: string[];
-    })
-  | (EventBase & {
-      type: 'meeting_summary_generated';
-      summary: MeetingSummary;
-    });
+  | LegacyAudioMeetingSummaryGeneratedEvent
+  | MeetingAssistantSummaryGeneratedEvent;
 
 export type TaskDecisionRecordedEvent = EventBase & {
   type: 'task_decision_recorded';
@@ -538,7 +539,7 @@ export type TimelineView = {
   lastPlanRevisionFailure: TaskPlanRevisionFailure | null;
   userBlockNotes: Record<
     string,
-    {notes: string; editedAt: string; lastBlockId: string | null}
+    { notes: string; editedAt: string; lastBlockId: string | null }
   >;
   userBlockCorrections: Record<string, UserBlockCorrectionView>;
   proactiveInsightsById: Record<string, ProactiveInsightView>;
@@ -547,7 +548,7 @@ export type TimelineView = {
   meetingDetectionOrder: string[];
   dismissedMeetingDetectionIds: Record<
     string,
-    {dedupeKey: string; dismissedAt: string}
+    { dedupeKey: string; dismissedAt: string }
   >;
   meetingRecordingsById: Record<string, MeetingRecording>;
   meetingRecordingOrder: string[];
@@ -568,7 +569,9 @@ export type TimelineView = {
 };
 
 export function createDomainId(prefix: string): string {
-  return `${prefix}_${Math.random().toString(36).slice(2, 10)}_${Date.now().toString(36)}`;
+  return `${prefix}_${Math.random()
+    .toString(36)
+    .slice(2, 10)}_${Date.now().toString(36)}`;
 }
 
 export function createOccurredAt(): string {
@@ -644,22 +647,22 @@ function cloneTimeline(timeline: TimelineView): TimelineView {
     sessionsById: Object.fromEntries(
       Object.entries(timeline.sessionsById).map(([id, session]) => [
         id,
-        {...session, observationIds: session.observationIds.slice()},
+        { ...session, observationIds: session.observationIds.slice() },
       ]),
     ),
     sessionOrder: timeline.sessionOrder.slice(),
     observationsById: Object.fromEntries(
       Object.entries(timeline.observationsById).map(([id, observation]) => [
         id,
-        {...observation},
+        { ...observation },
       ]),
     ),
     observationOrder: timeline.observationOrder.slice(),
-    contextSnapshotsById: {...timeline.contextSnapshotsById},
+    contextSnapshotsById: { ...timeline.contextSnapshotsById },
     contextSnapshotOrder: timeline.contextSnapshotOrder.slice(),
-    captureInspectionsById: {...timeline.captureInspectionsById},
+    captureInspectionsById: { ...timeline.captureInspectionsById },
     captureInspectionOrder: timeline.captureInspectionOrder.slice(),
-    captureRecordsById: {...timeline.captureRecordsById},
+    captureRecordsById: { ...timeline.captureRecordsById },
     captureRecordOrder: timeline.captureRecordOrder.slice(),
     taskSegmentsById: Object.fromEntries(
       Object.entries(timeline.taskSegmentsById).map(([id, segment]) => [
@@ -675,12 +678,12 @@ function cloneTimeline(timeline: TimelineView): TimelineView {
       ]),
     ),
     taskLineageOrder: timeline.taskLineageOrder.slice(),
-    taskDecisionsById: {...timeline.taskDecisionsById},
+    taskDecisionsById: { ...timeline.taskDecisionsById },
     taskDecisionOrder: timeline.taskDecisionOrder.slice(),
-    taskDecisionByObservationId: {...timeline.taskDecisionByObservationId},
-    pendingObservationsById: {...timeline.pendingObservationsById},
+    taskDecisionByObservationId: { ...timeline.taskDecisionByObservationId },
+    pendingObservationsById: { ...timeline.pendingObservationsById },
     pendingObservationOrder: timeline.pendingObservationOrder.slice(),
-    taskReconciliationsById: {...timeline.taskReconciliationsById},
+    taskReconciliationsById: { ...timeline.taskReconciliationsById },
     taskReconciliationOrder: timeline.taskReconciliationOrder.slice(),
     meetingCandidatesById: Object.fromEntries(
       Object.entries(timeline.meetingCandidatesById).map(([id, candidate]) => [
@@ -692,7 +695,7 @@ function cloneTimeline(timeline: TimelineView): TimelineView {
     audioRecordingsById: Object.fromEntries(
       Object.entries(timeline.audioRecordingsById).map(([id, recording]) => [
         id,
-        {...recording},
+        { ...recording },
       ]),
     ),
     audioRecordingOrder: timeline.audioRecordingOrder.slice(),
@@ -706,34 +709,34 @@ function cloneTimeline(timeline: TimelineView): TimelineView {
     meetingSummariesById: Object.fromEntries(
       Object.entries(timeline.meetingSummariesById).map(([id, summary]) => [
         id,
-        {...summary, actionItems: summary.actionItems.slice()},
+        { ...summary, actionItems: summary.actionItems.slice() },
       ]),
     ),
     latestAudioPermissionStatus:
       timeline.latestAudioPermissionStatus == null
         ? null
-        : {...timeline.latestAudioPermissionStatus},
+        : { ...timeline.latestAudioPermissionStatus },
     planSnapshots: timeline.planSnapshots.slice(),
-    userBlockNotes: {...timeline.userBlockNotes},
-    userBlockCorrections: {...timeline.userBlockCorrections},
-    proactiveInsightsById: {...timeline.proactiveInsightsById},
+    userBlockNotes: { ...timeline.userBlockNotes },
+    userBlockCorrections: { ...timeline.userBlockCorrections },
+    proactiveInsightsById: { ...timeline.proactiveInsightsById },
     proactiveInsightOrder: timeline.proactiveInsightOrder.slice(),
-    meetingDetectionsById: {...timeline.meetingDetectionsById},
+    meetingDetectionsById: { ...timeline.meetingDetectionsById },
     meetingDetectionOrder: timeline.meetingDetectionOrder.slice(),
     dismissedMeetingDetectionIds: {
       ...timeline.dismissedMeetingDetectionIds,
     },
-    meetingRecordingsById: {...timeline.meetingRecordingsById},
+    meetingRecordingsById: { ...timeline.meetingRecordingsById },
     meetingRecordingOrder: timeline.meetingRecordingOrder.slice(),
     meetingTranscriptChunksByMeetingId: Object.fromEntries(
       Object.entries(timeline.meetingTranscriptChunksByMeetingId).map(
         ([meetingId, chunks]) => [
           meetingId,
-          chunks.map(chunk => ({...chunk})),
+          chunks.map(chunk => ({ ...chunk })),
         ],
       ),
     ),
-    meetingSummariesByMeetingId: {...timeline.meetingSummariesByMeetingId},
+    meetingSummariesByMeetingId: { ...timeline.meetingSummariesByMeetingId },
     calendarItemsById: Object.fromEntries(
       Object.entries(timeline.calendarItemsById).map(([id, item]) => [
         id,
@@ -803,8 +806,14 @@ function cloneAudioTranscript(
 ): AudioTranscriptView {
   return {
     ...transcript,
-    segments: transcript.segments.map(segment => ({...segment})),
+    segments: transcript.segments.map(segment => ({ ...segment })),
   };
+}
+
+function isMeetingAssistantSummaryEvent(
+  event: MeetingSummaryGeneratedEvent,
+): event is MeetingAssistantSummaryGeneratedEvent {
+  return typeof event.summary === 'object';
 }
 
 function ensureLineage(
@@ -827,7 +836,7 @@ function ensureLineage(
     latestLiveSummary: segment.liveSummary,
     finalTitle: segment.finalTitle,
     finalSummary: segment.finalSummary,
-    entityMemory: {...segment.entityMemory},
+    entityMemory: { ...segment.entityMemory },
     confidence: segment.confidence,
     reviewStatus: segment.reviewStatus,
   };
@@ -854,7 +863,10 @@ function attachObservationToSegment(
   segment.lastActiveTime = observedAt;
   if (observation.structured != null) {
     segment.supportingApps = Array.from(
-      new Set([...segment.supportingApps, ...observation.structured.entities.apps]),
+      new Set([
+        ...segment.supportingApps,
+        ...observation.structured.entities.apps,
+      ]),
     );
   }
 
@@ -1133,11 +1145,11 @@ export function applyEventInPlace(timeline: TimelineView, event: DomainEvent) {
             event.updates.recurrence === undefined
               ? item.recurrence
               : event.updates.recurrence == null
-                ? null
-                : {
-                    ...event.updates.recurrence,
-                    daysOfWeek: event.updates.recurrence.daysOfWeek?.slice(),
-                  },
+              ? null
+              : {
+                  ...event.updates.recurrence,
+                  daysOfWeek: event.updates.recurrence.daysOfWeek?.slice(),
+                },
           updatedAt: event.occurredAt,
         };
       }
@@ -1196,7 +1208,7 @@ export function applyEventInPlace(timeline: TimelineView, event: DomainEvent) {
         timeline.meetingTranscriptChunksByMeetingId[event.chunk.meetingId] ??
         [];
       if (!chunks.some(chunk => chunk.id === event.chunk.id)) {
-        chunks.push({...event.chunk});
+        chunks.push({ ...event.chunk });
       }
       timeline.meetingTranscriptChunksByMeetingId[event.chunk.meetingId] =
         chunks;
@@ -1276,7 +1288,7 @@ export function applyEventInPlace(timeline: TimelineView, event: DomainEvent) {
     }
 
     case 'audio_permission_changed': {
-      timeline.latestAudioPermissionStatus = {...event.status};
+      timeline.latestAudioPermissionStatus = { ...event.status };
       break;
     }
 
@@ -1328,8 +1340,7 @@ export function applyEventInPlace(timeline: TimelineView, event: DomainEvent) {
         recording.filePath = event.filePath;
         recording.byteLength = event.byteLength;
         if (recording.meetingId != null) {
-          const candidate =
-            timeline.meetingCandidatesById[recording.meetingId];
+          const candidate = timeline.meetingCandidatesById[recording.meetingId];
           if (candidate != null) {
             candidate.status = 'ended';
             candidate.endedAt = event.stoppedAt;
@@ -1382,27 +1393,24 @@ export function applyEventInPlace(timeline: TimelineView, event: DomainEvent) {
     }
 
     case 'meeting_summary_generated': {
-      if (typeof event.summary === 'object') {
+      if (isMeetingAssistantSummaryEvent(event)) {
         const summary = event.summary;
         timeline.meetingSummariesByMeetingId[summary.meetingId] = {
           ...summary,
         };
-        const recording = timeline.meetingRecordingsById[summary.meetingId] ?? null;
+        const recording =
+          timeline.meetingRecordingsById[summary.meetingId] ?? null;
         if (recording != null) {
           recording.status = 'stopped';
         }
       } else {
-        const summaryEvent = event as Extract<
-          MeetingSummaryGeneratedEvent,
-          {summary: string}
-        >;
-        timeline.meetingSummariesById[summaryEvent.meetingId] = {
-          meetingId: summaryEvent.meetingId,
-          recordingId: summaryEvent.recordingId,
-          generatedAt: summaryEvent.generatedAt,
-          title: summaryEvent.title,
-          summary: summaryEvent.summary,
-          actionItems: summaryEvent.actionItems.slice(),
+        timeline.meetingSummariesById[event.meetingId] = {
+          meetingId: event.meetingId,
+          recordingId: event.recordingId,
+          generatedAt: event.generatedAt,
+          title: event.title,
+          summary: event.summary,
+          actionItems: event.actionItems.slice(),
         };
       }
       break;
@@ -1554,15 +1562,12 @@ export function applyEventInPlace(timeline: TimelineView, event: DomainEvent) {
     case 'task_reconciled': {
       timeline.taskReconciliationsById[event.reconciliation.id] =
         event.reconciliation;
-      if (
-        !timeline.taskReconciliationOrder.includes(event.reconciliation.id)
-      ) {
+      if (!timeline.taskReconciliationOrder.includes(event.reconciliation.id)) {
         timeline.taskReconciliationOrder.push(event.reconciliation.id);
       }
       timeline.latestTaskReconciliationId = event.reconciliation.id;
 
-      const lineage =
-        timeline.taskLineagesById[event.reconciliation.lineageId];
+      const lineage = timeline.taskLineagesById[event.reconciliation.lineageId];
       if (lineage != null) {
         lineage.state = 'reconciled';
         lineage.finalTitle = event.reconciliation.finalTitle;
@@ -1692,7 +1697,9 @@ export function getCurrentContext(
   timeline: TimelineView,
 ): ContextSnapshotPayload | null {
   if (timeline.currentContextSnapshotId == null) return null;
-  return timeline.contextSnapshotsById[timeline.currentContextSnapshotId] ?? null;
+  return (
+    timeline.contextSnapshotsById[timeline.currentContextSnapshotId] ?? null
+  );
 }
 
 export function getVisibleObservations(
@@ -1729,9 +1736,7 @@ export function getPendingObservations(
 ): PendingObservationView[] {
   return timeline.pendingObservationOrder
     .map(observationId => timeline.pendingObservationsById[observationId])
-    .filter(
-      (pending): pending is PendingObservationView => pending != null,
-    );
+    .filter((pending): pending is PendingObservationView => pending != null);
 }
 
 export function getCurrentPrimaryTaskSegment(

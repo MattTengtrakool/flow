@@ -1,5 +1,5 @@
-import {BrowserWindow, app, ipcMain} from 'electron';
-import {existsSync, mkdirSync, unlinkSync} from 'node:fs';
+import { BrowserWindow, app, ipcMain } from 'electron';
+import { existsSync, mkdirSync, unlinkSync } from 'node:fs';
 import path from 'node:path';
 
 import type {
@@ -10,19 +10,23 @@ import type {
 } from '../../../src/calendar/types';
 import type {
   AudioPermissionStatus,
-  AudioRecordingRuntimeState,
   AudioRecordingSource,
   AudioRecordingView,
   AudioTranscriptView,
 } from '../../../src/audio/types';
-import {buildOrphanedAudioRecordingRepairEvent} from '../../../src/audio/orphanRepair';
-import {detectMeetingCandidate} from '../../../src/meeting/detector';
-import type {MeetingCandidateView} from '../../../src/meeting/types';
-import {generateStructuredObservationForCapture} from '../../../src/observation/runObservationForCapture';
-import type {MeetingRuntimeState} from '../../../src/meetings/types';
-import {PLANNER_CONFIG} from '../../../src/planner/config';
-import {runPlannerRevision} from '../../../src/planner/revisionEngine';
-import type {PlannerRevisionCause, TaskPlanRevisionFailure} from '../../../src/planner/types';
+import { buildOrphanedAudioRecordingRepairEvent } from '../../../src/audio/orphanRepair';
+import { detectMeetingCandidate } from '../../../src/meeting/detector';
+import {
+  generateStructuredObservationForCapture,
+  type ObserveCaptureArgs,
+} from '../../../src/observation/runObservationForCapture';
+import type { MeetingRuntimeState } from '../../../src/meetings/types';
+import { PLANNER_CONFIG } from '../../../src/planner/config';
+import { runPlannerRevision } from '../../../src/planner/revisionEngine';
+import type {
+  PlannerRevisionCause,
+  TaskPlanRevisionFailure,
+} from '../../../src/planner/types';
 import {
   sanitizeCalendarItem,
   sanitizeCalendarItemUpdate,
@@ -45,21 +49,19 @@ import {
   type DomainEvent,
   type TimelineView,
 } from '../../../src/timeline/eventLog';
-import {
-  buildTimelineDiagnostics,
-  type TimelineDiagnosticsReport,
-} from '../../../src/timeline/diagnostics';
-import {buildReconciliationEvents} from '../../../src/tasks/reconcile';
-import {runTaskEngineForObservation} from '../../../src/tasks/runTaskEngineForObservation';
+import { buildTimelineDiagnostics } from '../../../src/timeline/diagnostics';
+import { buildReconciliationEvents } from '../../../src/tasks/reconcile';
+import { runTaskEngineForObservation } from '../../../src/tasks/runTaskEngineForObservation';
+import type { TimelineStatePayload } from '../../shared/flowApi';
 import {
   generateManagedObservationForCapture,
   generateManagedReplanBlocks,
 } from '../ai/managedAiClient';
-import {nativeAudioClient} from '../audio/nativeAudioClient';
-import {calendarService} from '../calendar/googleCalendarService';
-import {captureClient} from '../capture/captureService';
-import {settingsService} from '../settings/settingsService';
-import {loadEventLog, saveEventLog} from '../storage/eventLogStorage';
+import { nativeAudioClient } from '../audio/nativeAudioClient';
+import { calendarService } from '../calendar/googleCalendarService';
+import { captureClient } from '../capture/captureService';
+import { settingsService } from '../settings/settingsService';
+import { loadEventLog, saveEventLog } from '../storage/eventLogStorage';
 
 const EVENT_LOG_SAVE_DEBOUNCE_MS = 500;
 const CONTINUOUS_CAPTURE_INTERVAL_MS = 1000;
@@ -71,50 +73,16 @@ const VALID_RECURRENCE_FREQUENCIES = new Set([
   'yearly',
 ]);
 
-type TimelineStatePayload = {
-  eventLogLength: number;
-  timeline: TimelineView;
-  hydrationStatus: 'loading' | 'ready' | 'error';
-  storagePath: string | null;
-  errorMessage: string | null;
-  captureEnabled: boolean;
-  captureStatusMessage: string;
-  plannerInFlight: boolean;
-  plannerRuntimeState: {
-    lastRunAt: string | null;
-    lastRunCause: PlannerRevisionCause | null;
-    lastSnapshotId: string | null;
-    lastFailure: TaskPlanRevisionFailure | null;
-    lastSkippedReason: string | null;
-    consecutiveFailureCount: number;
-  };
-  audioRuntimeState: AudioRecordingRuntimeState;
-  activeMeetingCandidate: MeetingCandidateView | null;
-  diagnostics: TimelineDiagnosticsReport;
-  lastCapturedAt: string | null;
-  lastObservedAt: string | null;
-  plannerLastRunAt: string | null;
-  plannerLastSnapshotId: string | null;
-  plannerLastFailureMessage: string | null;
-  plannerStatus: 'idle' | 'planning' | 'failed';
-  privacyModeEnabled: boolean;
-  aiConnectionMode: ReturnType<typeof settingsService.publicSettings>['aiConnectionMode'];
-  selectedProvider: ReturnType<typeof settingsService.publicSettings>['selectedProvider'];
-  managedAi: ReturnType<typeof settingsService.publicSettings>['managedAi'];
-  apiKeyStatus: ReturnType<typeof settingsService.publicSettings>['apiKeys'];
-  recentActivity: Array<{
-    kind: 'capture' | 'observation' | 'planner';
-    occurredAt: string;
-    title: string;
-    detail: string;
-  }>;
-  meetingDetection: MeetingRuntimeState['currentDetection'];
-  activeMeetingRecording: MeetingRuntimeState['activeRecording'];
-  meetingTranscriptionStatus: MeetingRuntimeState['transcriptionStatus'];
-};
-
 function trimCalendarText(value: unknown): string {
   return typeof value === 'string' ? value.trim() : '';
+}
+
+function shouldUseManagedAi(
+  settings: ReturnType<typeof settingsService.publicSettings>,
+): boolean {
+  return (
+    settings.aiConnectionMode === 'managed' && settings.managedAi.configured
+  );
 }
 
 function normalizeDateTime(value: unknown, fallbackMs: number): string {
@@ -151,7 +119,9 @@ function normalizeRecurrence(
     frequency: recurrence.frequency,
     interval,
     daysOfWeek:
-      recurrence.frequency === 'weekly' && daysOfWeek != null && daysOfWeek.length > 0
+      recurrence.frequency === 'weekly' &&
+      daysOfWeek != null &&
+      daysOfWeek.length > 0
         ? daysOfWeek
         : undefined,
     until: normalizeUntilDate(recurrence.until),
@@ -283,7 +253,9 @@ class ElectronTimelineService {
       ]);
       this.transcribeRecording(recordingId, payload.outputPath).catch(error => {
         this.audioLastError =
-          error instanceof Error ? error.message : 'Audio transcription failed.';
+          error instanceof Error
+            ? error.message
+            : 'Audio transcription failed.';
         this.broadcast();
       });
       this.broadcast();
@@ -422,8 +394,8 @@ class ElectronTimelineService {
       plannerStatus: this.plannerInFlight
         ? 'planning'
         : this.plannerLastFailure != null
-          ? 'failed'
-          : 'idle',
+        ? 'failed'
+        : 'idle',
       privacyModeEnabled: settings.privacyModeEnabled,
       aiConnectionMode: settings.aiConnectionMode,
       selectedProvider: settings.selectedProvider,
@@ -576,19 +548,31 @@ class ElectronTimelineService {
     const t = this.timeline;
 
     if (t.captureRecordOrder.length > MAX_CAPTURES) {
-      const excess = t.captureRecordOrder.splice(0, t.captureRecordOrder.length - MAX_CAPTURES);
+      const excess = t.captureRecordOrder.splice(
+        0,
+        t.captureRecordOrder.length - MAX_CAPTURES,
+      );
       for (const id of excess) delete t.captureRecordsById[id];
     }
     if (t.captureInspectionOrder.length > MAX_INSPECTIONS) {
-      const excess = t.captureInspectionOrder.splice(0, t.captureInspectionOrder.length - MAX_INSPECTIONS);
+      const excess = t.captureInspectionOrder.splice(
+        0,
+        t.captureInspectionOrder.length - MAX_INSPECTIONS,
+      );
       for (const id of excess) delete t.captureInspectionsById[id];
     }
     if (t.contextSnapshotOrder.length > MAX_CONTEXT_SNAPSHOTS) {
-      const excess = t.contextSnapshotOrder.splice(0, t.contextSnapshotOrder.length - MAX_CONTEXT_SNAPSHOTS);
+      const excess = t.contextSnapshotOrder.splice(
+        0,
+        t.contextSnapshotOrder.length - MAX_CONTEXT_SNAPSHOTS,
+      );
       for (const id of excess) delete t.contextSnapshotsById[id];
     }
     if (t.observationOrder.length > MAX_OBSERVATIONS) {
-      const excess = t.observationOrder.splice(0, t.observationOrder.length - MAX_OBSERVATIONS);
+      const excess = t.observationOrder.splice(
+        0,
+        t.observationOrder.length - MAX_OBSERVATIONS,
+      );
       for (const id of excess) delete t.observationsById[id];
     }
     if (t.meetingCandidateOrder.length > MAX_MEETING_CANDIDATES) {
@@ -621,7 +605,9 @@ class ElectronTimelineService {
         })
         .catch(error => {
           this.errorMessage =
-            error instanceof Error ? error.message : 'Failed to save event log.';
+            error instanceof Error
+              ? error.message
+              : 'Failed to save event log.';
           this.broadcast();
         });
     }, EVENT_LOG_SAVE_DEBOUNCE_MS);
@@ -707,8 +693,13 @@ class ElectronTimelineService {
     }
   }
 
-  private ensurePlannerCadence(delayMs = PLANNER_CONFIG.plannerRevisionIntervalMs) {
-    if (this.plannerCadenceTimer != null || this.timeline.currentSessionId == null) {
+  private ensurePlannerCadence(
+    delayMs = PLANNER_CONFIG.plannerRevisionIntervalMs,
+  ) {
+    if (
+      this.plannerCadenceTimer != null ||
+      this.timeline.currentSessionId == null
+    ) {
       return;
     }
     this.plannerCadenceTimer = setTimeout(() => {
@@ -826,14 +817,7 @@ class ElectronTimelineService {
           .slice(-5)
           .map(observation => observation.structured!),
       };
-      const settings = settingsService.publicSettings();
-      const run =
-        settings.aiConnectionMode === 'managed' && settings.managedAi.configured
-          ? await generateManagedObservationForCapture(observationArgs)
-          : await generateStructuredObservationForCapture({
-              ...observationArgs,
-              apiKey: process.env.GEMINI_API_KEY,
-            });
+      const run = await this.generateObservationRun(observationArgs);
       const observationId = createDomainId('observation');
       this.appendEvents([
         {
@@ -848,17 +832,7 @@ class ElectronTimelineService {
           occurredAt: captureMetadata.capturedAt,
         },
       ]);
-      const observation = this.timeline.observationsById[observationId];
-      if (observation != null) {
-        const taskResult = await runTaskEngineForObservation({
-          timeline: this.timeline,
-          observation,
-          getLatestTimeline: () => this.timeline,
-        });
-        if (taskResult != null) {
-          this.appendEvents(taskResult.events);
-        }
-      }
+      await this.extractTasksForObservation(observationId);
       this.maybeKickoffSessionStartPlan(observationSessionId);
       this.maybePromptForMeeting();
       this.lastObservedFrameHash = captureMetadata.frameHash;
@@ -866,12 +840,39 @@ class ElectronTimelineService {
       this.captureStatusMessage = 'Captured the latest changed frame.';
     } catch (error) {
       this.captureStatusMessage =
-        error instanceof Error ? error.message : 'Observation generation failed.';
+        error instanceof Error
+          ? error.message
+          : 'Observation generation failed.';
     } finally {
       this.observationBusy = false;
       this.broadcast();
     }
     return result;
+  }
+
+  private async generateObservationRun(args: ObserveCaptureArgs) {
+    const settings = settingsService.publicSettings();
+    if (shouldUseManagedAi(settings)) {
+      return generateManagedObservationForCapture(args);
+    }
+    return generateStructuredObservationForCapture({
+      ...args,
+      apiKey: process.env.GEMINI_API_KEY,
+    });
+  }
+
+  private async extractTasksForObservation(observationId: string) {
+    const observation = this.timeline.observationsById[observationId];
+    if (observation == null) return;
+
+    const taskResult = await runTaskEngineForObservation({
+      timeline: this.timeline,
+      observation,
+      getLatestTimeline: () => this.timeline,
+    });
+    if (taskResult != null && taskResult.events.length > 0) {
+      this.appendEvents(taskResult.events);
+    }
   }
 
   async runPlannerRevision(
@@ -885,7 +886,7 @@ class ElectronTimelineService {
   ) {
     const normalized =
       typeof request === 'boolean'
-        ? {force: request, cause: 'manual' as PlannerRevisionCause}
+        ? { force: request, cause: 'manual' as PlannerRevisionCause }
         : {
             force: request.force === true,
             cause: request.cause ?? ('manual' as PlannerRevisionCause),
@@ -907,6 +908,7 @@ class ElectronTimelineService {
     this.broadcast();
     try {
       const settings = settingsService.publicSettings();
+      const useManagedAi = shouldUseManagedAi(settings);
       const windowEndAt = createOccurredAt();
       const windowStartAt = new Date(
         Date.parse(windowEndAt) - PLANNER_CONFIG.plannerRevisionWindowMs,
@@ -924,14 +926,8 @@ class ElectronTimelineService {
         ),
         maxObservationsInPrompt:
           PLANNER_CONFIG.plannerRevisionMaxObservationsInPrompt,
-        apiKey:
-          settings.aiConnectionMode === 'managed'
-            ? undefined
-            : process.env.GEMINI_API_KEY,
-        runReplan:
-          settings.aiConnectionMode === 'managed' && settings.managedAi.configured
-            ? generateManagedReplanBlocks
-            : undefined,
+        apiKey: useManagedAi ? undefined : process.env.GEMINI_API_KEY,
+        runReplan: useManagedAi ? generateManagedReplanBlocks : undefined,
       });
       if (result.kind !== 'skipped') {
         this.appendEvents(result.events);
@@ -941,8 +937,8 @@ class ElectronTimelineService {
         result.kind === 'success'
           ? result.snapshot.revisedAt
           : result.kind === 'failure'
-            ? result.failure.failedAt
-            : createOccurredAt();
+          ? result.failure.failedAt
+          : createOccurredAt();
       if (result.kind === 'success') {
         this.plannerLastSnapshotId = result.snapshot.snapshotId;
         this.plannerLastFailure = null;
@@ -980,7 +976,11 @@ class ElectronTimelineService {
     }
   }
 
-  editBlockNotes(args: {notesKey: string; blockId: string | null; notes: string}) {
+  editBlockNotes(args: {
+    notesKey: string;
+    blockId: string | null;
+    notes: string;
+  }) {
     this.appendEvents([
       {
         id: createDomainId('event'),
@@ -1016,7 +1016,7 @@ class ElectronTimelineService {
     return this.snapshot();
   }
 
-  updateCalendarItem(args: {itemId: string; updates: CalendarItemUpdate}) {
+  updateCalendarItem(args: { itemId: string; updates: CalendarItemUpdate }) {
     const current = this.timeline.calendarItemsById[args.itemId];
     if (current == null || current.deletedAt != null) return this.snapshot();
 
@@ -1104,10 +1104,12 @@ class ElectronTimelineService {
     return status;
   }
 
-  async startAudioRecording(args: {
-    meetingId?: string | null;
-    source?: AudioRecordingSource;
-  } = {}) {
+  async startAudioRecording(
+    args: {
+      meetingId?: string | null;
+      source?: AudioRecordingSource;
+    } = {},
+  ) {
     if (this.timeline.activeAudioRecordingId != null) {
       throw new Error('An audio recording is already running.');
     }
@@ -1117,9 +1119,7 @@ class ElectronTimelineService {
     const source = args.source ?? 'microphone';
     const recordingId = createDomainId('recording');
     const meetingId =
-      args.meetingId ??
-      this.timeline.activeMeetingCandidateId ??
-      null;
+      args.meetingId ?? this.timeline.activeMeetingCandidateId ?? null;
     const outputPath = this.audioOutputPath(recordingId);
     this.audioInFlight = true;
     this.audioLastError = null;
@@ -1222,7 +1222,7 @@ class ElectronTimelineService {
     return this.snapshot();
   }
 
-  deleteAudioRecording(args: {recordingId: string}) {
+  deleteAudioRecording(args: { recordingId: string }) {
     const recording = this.timeline.audioRecordingsById[args.recordingId];
     if (recording?.filePath != null && existsSync(recording.filePath)) {
       unlinkSync(recording.filePath);
@@ -1262,12 +1262,12 @@ class ElectronTimelineService {
     const now = new Date();
     const datePart = now.toISOString().slice(0, 10);
     const directory = path.join(app.getPath('userData'), 'audio', datePart);
-    mkdirSync(directory, {recursive: true});
+    mkdirSync(directory, { recursive: true });
     return path.join(directory, `${recordingId}.m4a`);
   }
 
   private async transcribeRecording(recordingId: string, filePath: string) {
-    const result = await nativeAudioClient.transcribeFile({filePath});
+    const result = await nativeAudioClient.transcribeFile({ filePath });
     const transcript: AudioTranscriptView = {
       transcriptId: createDomainId('transcript'),
       recordingId,
@@ -1304,7 +1304,7 @@ class ElectronTimelineService {
     });
   }
 
-  async runDiagnosticReplan(args: {sessionId?: string | null} = {}) {
+  async runDiagnosticReplan(args: { sessionId?: string | null } = {}) {
     await this.runPlannerRevision({
       force: true,
       cause: 'diagnostic_repair',
@@ -1338,9 +1338,15 @@ export const timelineService = new ElectronTimelineService();
 
 export function registerTimelineIpcHandlers() {
   ipcMain.handle('flow:timeline:getState', () => timelineService.snapshot());
-  ipcMain.handle('flow:timeline:startSession', () => timelineService.startSession());
-  ipcMain.handle('flow:timeline:stopSession', () => timelineService.stopSession());
-  ipcMain.handle('flow:timeline:captureNow', () => timelineService.captureNow());
+  ipcMain.handle('flow:timeline:startSession', () =>
+    timelineService.startSession(),
+  );
+  ipcMain.handle('flow:timeline:stopSession', () =>
+    timelineService.stopSession(),
+  );
+  ipcMain.handle('flow:timeline:captureNow', () =>
+    timelineService.captureNow(),
+  );
   ipcMain.handle('flow:timeline:runPlannerRevision', (_event, force: boolean) =>
     timelineService.runPlannerRevision(force),
   );

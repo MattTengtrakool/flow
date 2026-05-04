@@ -284,6 +284,32 @@ describe('stepEvent', () => {
     );
   });
 
+  test('keeps legacy audio meeting summaries replayable', () => {
+    const timeline = replayEventLog([
+      {
+        id: 'e-legacy-summary',
+        type: 'meeting_summary_generated',
+        meetingId: 'meeting_legacy',
+        recordingId: 'recording_legacy',
+        generatedAt: '2026-05-02T18:35:00.000Z',
+        title: 'Legacy sync',
+        summary: 'Legacy recorder captured follow-ups.',
+        actionItems: ['Send the notes.'],
+        occurredAt: '2026-05-02T18:35:00.000Z',
+      },
+    ]);
+
+    expect(timeline.meetingSummariesById.meeting_legacy).toEqual({
+      meetingId: 'meeting_legacy',
+      recordingId: 'recording_legacy',
+      generatedAt: '2026-05-02T18:35:00.000Z',
+      title: 'Legacy sync',
+      summary: 'Legacy recorder captured follow-ups.',
+      actionItems: ['Send the notes.'],
+    });
+    expect(timeline.meetingSummariesByMeetingId.meeting_legacy).toBeUndefined();
+  });
+
   test('updating an existing session clones the session entry', () => {
     const stopEvent: DomainEvent = {
       id: 'e3',
