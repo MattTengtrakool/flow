@@ -5,7 +5,7 @@ import {
 } from './types';
 
 export const OBSERVATION_PROMPT_VERSION =
-  '2026-05-04.observation-noun-task-hypothesis.v1';
+  '2026-05-04.observation-ignore-flow-status.v1';
 
 export const STRUCTURED_OBSERVATION_JSON_SCHEMA = {
   type: 'object',

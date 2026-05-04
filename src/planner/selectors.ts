@@ -751,6 +751,7 @@ function computeStableCoverageEndMs(
 
 function isDisplayableWorklogBlock(block: WorklogCalendarBlock): boolean {
   if (block.source === 'user_calendar') return true;
+  if (isFlowInternalStatusBlock(block)) return false;
 
   const durationMs = Math.max(
     0,
@@ -761,6 +762,28 @@ function isDisplayableWorklogBlock(block: WorklogCalendarBlock): boolean {
     return true;
   }
   return hasTaskAnchor(block);
+}
+
+function isFlowInternalStatusBlock(block: WorklogCalendarBlock): boolean {
+  if (hasTaskAnchor(block)) return false;
+
+  const text = [
+    block.title,
+    block.summary.headline,
+    block.summary.narrative,
+    ...(block.keyActivities ?? []),
+  ]
+    .join(' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .toLowerCase();
+  if (text.length === 0) return false;
+
+  return (
+    /\bflow is (?:finalizing|recording|transcribing|capturing)\b/.test(text) ||
+    /\b(?:meeting notes|stop notes|transcript notes)\b/.test(text) ||
+    /^(?:finalizing|recording|transcribing|capturing|working)$/.test(text)
+  );
 }
 
 function hasTaskAnchor(block: WorklogCalendarBlock): boolean {

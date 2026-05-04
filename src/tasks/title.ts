@@ -51,6 +51,9 @@ const ACTIVITY_GERUNDS = [
   'confirming',
   'completing',
   'communicating',
+  'finalizing',
+  'recording',
+  'transcribing',
 ];
 
 const ACTIVITY_PATTERN = ACTIVITY_GERUNDS.join('|');
@@ -64,7 +67,7 @@ const TWO_ACTIVITIES_RE = new RegExp(
   'i',
 );
 const GENERIC_ALONE_RE =
-  /^(?:workflow|workflows|environment|config|configuration|setup|updates|code|changes|work|working|task|miscellaneous)(?:\s|$)/i;
+  /^(?:workflow|workflows|environment|config|configuration|setup|updates|code|changes|work|working|task|miscellaneous|meeting notes|stop notes|capturing|finalizing|recording|transcribing)(?:\s|$)/i;
 
 export function isWellFormedTaskHeadline(headline: string): boolean {
   const trimmed = headline.trim();

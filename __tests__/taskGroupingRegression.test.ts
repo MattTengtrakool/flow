@@ -485,6 +485,110 @@ describe('live task grouping regression coverage', () => {
     expect(worklog.blocks).toHaveLength(0);
   });
 
+  test('hides long Flow meeting-note status overlays from the worklog', () => {
+    const structured: StructuredObservation = {
+      summary:
+        'Flow is finalizing the recording and preparing transcript notes.',
+      activityType: 'other',
+      taskHypothesis: 'Finalizing meeting notes',
+      confidence: 0.72,
+      sensitivity: 'low',
+      sensitivityReason: 'Flow status chrome is visible.',
+      artifacts: [],
+      entities: {
+        apps: ['Flow'],
+        documents: [],
+        tickets: [],
+        repos: [],
+        urls: [],
+        people: [],
+      },
+      nextAction: null,
+    };
+    const statusSegment = segment({
+      liveTitle: 'Finalizing meeting notes',
+      liveSummary: structured.summary,
+      entityMemory: {
+        apps: ['Flow'],
+        repos: [],
+        ticketIds: [],
+        projects: [],
+        documents: [],
+        people: [],
+        urls: [],
+      },
+    });
+
+    const events: DomainEvent[] = [
+      {
+        id: 'event_session_start',
+        type: 'session_started',
+        sessionId: 'session_1',
+        title: 'Session 1',
+        occurredAt: '2026-05-03T17:00:00.000Z',
+      },
+      ...Array.from({ length: 6 }, (_, index) =>
+        captureEvent(
+          `capture_status_${index + 1}`,
+          new Date(
+            Date.parse('2026-05-03T17:00:00.000Z') +
+              index * 2 * 60 * 1000,
+          ).toISOString(),
+          'f'.repeat(64),
+        ),
+      ),
+      {
+        id: 'event_obs_1',
+        type: 'observation_added',
+        observationId: 'obs_1',
+        sessionId: 'session_1',
+        text: structured.summary,
+        structured,
+        occurredAt: '2026-05-03T17:00:00.000Z',
+      },
+      {
+        id: 'event_segment_1',
+        type: 'task_segment_started',
+        segment: statusSegment,
+        occurredAt: '2026-05-03T17:00:00.000Z',
+      },
+      {
+        id: 'event_decision_1',
+        type: 'task_decision_recorded',
+        decisionId: 'decision_1',
+        occurredAt: '2026-05-03T17:00:00.000Z',
+        decision: {
+          id: 'decision_1',
+          observationId: 'obs_1',
+          occurredAt: '2026-05-03T17:00:00.000Z',
+          decision: 'start_new',
+          targetSegmentId: 'segment_1',
+          targetLineageId: 'lineage_1',
+          decisionMode: 'deterministic',
+          reasonCodes: ['no_active_segment'],
+          reasonText: 'Started a new segment.',
+          confidence: 1,
+          usedLlm: false,
+          candidateShortlist: [],
+          featureSnapshot: null,
+          stale: false,
+          errorReason: null,
+        },
+      },
+      {
+        id: 'event_session_stop',
+        type: 'session_stopped',
+        sessionId: 'session_1',
+        occurredAt: '2026-05-03T17:12:00.000Z',
+      },
+    ];
+
+    const timeline = replayEventLog(events);
+    const worklog = getDayWorklog(timeline, '2026-05-03', 'UTC');
+
+    expect(worklog.blocks).toHaveLength(0);
+  });
+
   test('replays live task segment events and uses them before planner snapshots', () => {
     const events: DomainEvent[] = [
       {

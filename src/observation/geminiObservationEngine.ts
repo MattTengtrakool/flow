@@ -170,6 +170,8 @@ function buildObservationPrompt(input: ObservationEngineInput): string {
     'Put the activity mechanics in summary and nextAction; keep taskHypothesis as the stable noun title.',
     'Do NOT copy a previous taskHypothesis unless the current screenshot clearly shows the same specific work.',
     'If the screen shows a different app, document, or focus than the previous observations, write a NEW hypothesis.',
+    'Ignore Flow app chrome and companion/status overlays when naming the task. Labels like "Meeting notes", "Finalizing", "Recording", "Transcribing", "Stop notes", and "Capturing" describe Flow state, not the user task.',
+    'If a Flow overlay is visible over another app, name the underlying app/document/task when visible. If only the Flow status overlay has specific text, set taskHypothesis to null.',
     'Set taskHypothesis to null when the current task is ambiguous or the screen lacks task-specific context.',
     '',
     'Recent observations are provided for temporal context only — re-evaluate all fields independently based on current evidence.',
