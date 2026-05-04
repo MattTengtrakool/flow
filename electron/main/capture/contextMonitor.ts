@@ -1,4 +1,4 @@
-import type {ContextSnapshotPayload} from '../../../src/types/contextCapture';
+import type { ContextSnapshotPayload } from '../../../src/types/contextCapture';
 
 function rectChanged(
   previous: ContextSnapshotPayload['windowFrame'],

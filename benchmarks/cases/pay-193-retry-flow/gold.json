@@ -1,0 +1,21 @@
+{
+  "name": "PAY-193 retry flow",
+  "description": "Single coding task with a visible ticket, repository, and source file.",
+  "blocks": [
+    {
+      "id": "gold_pay_193_retry_flow",
+      "startAt": "2026-04-24T16:00:00.000Z",
+      "endAt": "2026-04-24T16:20:00.000Z",
+      "headline": "PAY-193 retry flow",
+      "category": "coding",
+      "artifacts": {
+        "apps": ["Cursor"],
+        "repositories": ["payments-service"],
+        "tickets": ["PAY-193"],
+        "documents": ["retry.ts"],
+        "urls": [],
+        "people": []
+      }
+    }
+  ]
+}

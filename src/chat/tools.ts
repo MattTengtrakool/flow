@@ -1,6 +1,7 @@
-import type {ObservationView, TimelineView} from '../timeline/eventLog';
-import type {WorklogCalendarBlock} from '../worklog/types';
-import {getAllPlanCalendarBlocks} from '../planner/selectors';
+import type { ObservationView, TimelineView } from '../timeline/eventLog';
+import type { CalendarContext, CalendarContextEvent } from '../calendar/types';
+import type { WorklogCalendarBlock } from '../worklog/types';
+import { getAllPlanCalendarBlocks } from '../planner/selectors';
 
 /**
  * Tools the chat assistant can call to answer questions about the user's
@@ -14,7 +15,10 @@ export type ChatToolName =
   | 'get_blocks_in_range'
   | 'get_total_time'
   | 'get_block_details'
-  | 'get_observations_in_range';
+  | 'get_observations_in_range'
+  | 'get_meeting_notes_in_range'
+  | 'get_calendar_events_in_range'
+  | 'get_availability_in_range';
 
 export type ChatToolArgs = Record<string, unknown>;
 export type ChatToolResult = unknown;
@@ -92,7 +96,8 @@ export const CHAT_TOOL_DECLARATIONS: ChatToolDeclaration[] = [
         },
         topicFilter: {
           type: 'string',
-          description: 'Optional substring filter (same as get_blocks_in_range).',
+          description:
+            'Optional substring filter (same as get_blocks_in_range).',
         },
       },
       required: ['startIso', 'endIso', 'group'],
@@ -147,12 +152,89 @@ export const CHAT_TOOL_DECLARATIONS: ChatToolDeclaration[] = [
       required: ['startIso', 'endIso'],
     },
   },
+  {
+    name: 'get_meeting_notes_in_range',
+    description:
+      'Return transcribed meeting notes in a time range, including summaries, decisions, action items, and short transcript snippets. Use this when the user asks what happened in a meeting or asks for decisions/follow-ups from calls.',
+    parameters: {
+      type: 'object',
+      properties: {
+        startIso: {
+          type: 'string',
+          description: 'Start of the range, ISO-8601 timestamp. Inclusive.',
+        },
+        endIso: {
+          type: 'string',
+          description: 'End of the range, ISO-8601 timestamp. Inclusive.',
+        },
+        query: {
+          type: 'string',
+          description:
+            'Optional case-insensitive substring filter applied to meeting title, summary, transcript, decisions, and action items.',
+        },
+        includeTranscript: {
+          type: 'boolean',
+          description:
+            'Whether to include transcript snippets. Default true, capped to short excerpts.',
+        },
+      },
+      required: ['startIso', 'endIso'],
+    },
+  },
+  {
+    name: 'get_calendar_events_in_range',
+    description:
+      'Return read-only Google Calendar events in a time range, including local Flow annotations when present. Calendar events express schedule intent, not proof that the user completed work unless Flow observations also support it.',
+    parameters: {
+      type: 'object',
+      properties: {
+        startIso: {
+          type: 'string',
+          description: 'Start of the range, ISO-8601 timestamp. Inclusive.',
+        },
+        endIso: {
+          type: 'string',
+          description: 'End of the range, ISO-8601 timestamp. Inclusive.',
+        },
+        includeFreeEvents: {
+          type: 'boolean',
+          description:
+            'Whether to include transparent/free calendar events. Default false.',
+        },
+      },
+      required: ['startIso', 'endIso'],
+    },
+  },
+  {
+    name: 'get_availability_in_range',
+    description:
+      'Return free time windows after subtracting busy scheduled Google Calendar events. Context-only events are visible context but do not block availability.',
+    parameters: {
+      type: 'object',
+      properties: {
+        startIso: {
+          type: 'string',
+          description: 'Start of the range, ISO-8601 timestamp. Inclusive.',
+        },
+        endIso: {
+          type: 'string',
+          description: 'End of the range, ISO-8601 timestamp. Inclusive.',
+        },
+        minMinutes: {
+          type: 'number',
+          description: 'Minimum free slot duration in minutes. Default 15.',
+        },
+      },
+      required: ['startIso', 'endIso'],
+    },
+  },
 ];
 
 /* ----------------------------- Executors ----------------------------- */
 
 export type ChatToolContext = {
   timeline: TimelineView;
+  calendarContext?: CalendarContext;
   timezone: string;
 };
 
@@ -169,11 +251,157 @@ export function executeChatTool(
       return executeGetBlockDetails(call.args, context);
     case 'get_observations_in_range':
       return executeGetObservationsInRange(call.args, context);
+    case 'get_meeting_notes_in_range':
+      return executeGetMeetingNotesInRange(call.args, context);
+    case 'get_calendar_events_in_range':
+      return executeGetCalendarEventsInRange(call.args, context);
+    case 'get_availability_in_range':
+      return executeGetAvailabilityInRange(call.args, context);
     default: {
       const unknownName: never = call.name;
-      return {error: `Unknown tool: ${String(unknownName)}`};
+      return { error: `Unknown tool: ${String(unknownName)}` };
     }
   }
+}
+
+function executeGetMeetingNotesInRange(
+  args: ChatToolArgs,
+  context: ChatToolContext,
+): ChatToolResult {
+  const startMs = parseIsoSafe(args.startIso);
+  const endMs = parseIsoSafe(args.endIso);
+  if (startMs == null || endMs == null) {
+    return { error: 'startIso and endIso must be valid ISO-8601 timestamps.' };
+  }
+  const query =
+    typeof args.query === 'string' ? args.query.trim().toLowerCase() : null;
+  const includeTranscript = args.includeTranscript !== false;
+  const meetings = context.timeline.meetingRecordingOrder
+    .map(meetingId => context.timeline.meetingRecordingsById[meetingId])
+    .filter(recording => recording != null)
+    .filter(recording => {
+      const startedMs = Date.parse(recording.startedAt);
+      const stoppedMs =
+        recording.stoppedAt != null
+          ? Date.parse(recording.stoppedAt)
+          : startedMs;
+      return (
+        Number.isFinite(startedMs) &&
+        Number.isFinite(stoppedMs) &&
+        startedMs <= endMs &&
+        stoppedMs >= startMs
+      );
+    })
+    .map(recording => {
+      const summary =
+        context.timeline.meetingSummariesByMeetingId[recording.meetingId] ??
+        null;
+      const transcriptChunks =
+        context.timeline.meetingTranscriptChunksByMeetingId[
+          recording.meetingId
+        ] ?? [];
+      return {
+        id: recording.meetingId,
+        title:
+          summary?.title ??
+          recording.windowTitle ??
+          recording.appName ??
+          'Meeting',
+        startedAt: recording.startedAt,
+        stoppedAt: recording.stoppedAt,
+        status: recording.status,
+        appName: recording.appName,
+        calendarEventId: recording.calendarEventId,
+        summary: summary?.summary ?? null,
+        decisions: summary?.decisions ?? [],
+        actionItems: summary?.actionItems ?? [],
+        followUps: summary?.followUps ?? [],
+        questions: summary?.questions ?? [],
+        transcriptSnippets: includeTranscript
+          ? transcriptChunks
+              .map(chunk => ({
+                chunkId: chunk.chunkId,
+                startedAt: chunk.startedAt,
+                endedAt: chunk.endedAt,
+                text: truncate(chunk.text, 360),
+                speakerLabel: chunk.speakerLabel,
+              }))
+              .slice(0, 8)
+          : [],
+        transcriptChunkCount: transcriptChunks.length,
+      };
+    })
+    .filter(meeting =>
+      query == null ? true : meetingMatchesQuery(meeting, query),
+    );
+
+  return {
+    range: { startIso: args.startIso, endIso: args.endIso },
+    meetingCount: meetings.length,
+    meetings,
+  };
+}
+
+function executeGetCalendarEventsInRange(
+  args: ChatToolArgs,
+  context: ChatToolContext,
+): ChatToolResult {
+  const startMs = parseIsoSafe(args.startIso);
+  const endMs = parseIsoSafe(args.endIso);
+  if (startMs == null || endMs == null) {
+    return { error: 'startIso and endIso must be valid ISO-8601 timestamps.' };
+  }
+  const includeFreeEvents = args.includeFreeEvents === true;
+  const events = (context.calendarContext?.events ?? [])
+    .filter(event => calendarEventOverlapsRange(event, startMs, endMs))
+    .filter(event => includeFreeEvents || event.busy)
+    .map(event => ({
+      id: event.id,
+      title: event.title,
+      startTime: event.startTime,
+      endTime: event.endTime,
+      allDay: event.allDay,
+      busy: event.busy,
+      eventType: event.eventType,
+      mode: event.mode,
+      sourceSummary: event.sourceSummary,
+      annotation: event.annotation,
+    }));
+
+  return {
+    range: { startIso: args.startIso, endIso: args.endIso },
+    eventCount: events.length,
+    events,
+  };
+}
+
+function executeGetAvailabilityInRange(
+  args: ChatToolArgs,
+  context: ChatToolContext,
+): ChatToolResult {
+  const startMs = parseIsoSafe(args.startIso);
+  const endMs = parseIsoSafe(args.endIso);
+  if (startMs == null || endMs == null) {
+    return { error: 'startIso and endIso must be valid ISO-8601 timestamps.' };
+  }
+  const minMinutes = Math.max(
+    1,
+    typeof args.minMinutes === 'number' ? Math.floor(args.minMinutes) : 15,
+  );
+  const busyEvents = (context.calendarContext?.events ?? [])
+    .filter(event => event.busy && event.mode === 'scheduled')
+    .filter(event => calendarEventOverlapsRange(event, startMs, endMs))
+    .sort((a, b) => a.startTime.localeCompare(b.startTime));
+  const slots = computeFreeSlots(startMs, endMs, busyEvents)
+    .filter(slot => slot.durationMinutes >= minMinutes)
+    .slice(0, 20);
+
+  return {
+    range: { startIso: args.startIso, endIso: args.endIso },
+    minMinutes,
+    busyEventCount: busyEvents.length,
+    slots,
+  };
 }
 
 function executeGetBlocksInRange(
@@ -183,19 +411,23 @@ function executeGetBlocksInRange(
   const startMs = parseIsoSafe(args.startIso);
   const endMs = parseIsoSafe(args.endIso);
   if (startMs == null || endMs == null) {
-    return {error: 'startIso and endIso must be valid ISO-8601 timestamps.'};
+    return { error: 'startIso and endIso must be valid ISO-8601 timestamps.' };
   }
   const topicFilter =
-    typeof args.topicFilter === 'string' ? args.topicFilter.toLowerCase() : null;
+    typeof args.topicFilter === 'string'
+      ? args.topicFilter.toLowerCase()
+      : null;
 
   const all = getAllPlanCalendarBlocks(context.timeline);
   const matches = all
     .filter(block => blockOverlapsRange(block, startMs, endMs))
-    .filter(block => (topicFilter ? blockMatchesTopic(block, topicFilter) : true))
+    .filter(block =>
+      topicFilter ? blockMatchesTopic(block, topicFilter) : true,
+    )
     .map(block => summariseBlock(block));
 
   return {
-    range: {startIso: args.startIso, endIso: args.endIso},
+    range: { startIso: args.startIso, endIso: args.endIso },
     topicFilter: topicFilter ?? null,
     blockCount: matches.length,
     totalMinutes: matches.reduce((sum, b) => sum + b.durationMinutes, 0),
@@ -210,16 +442,20 @@ function executeGetTotalTime(
   const startMs = parseIsoSafe(args.startIso);
   const endMs = parseIsoSafe(args.endIso);
   if (startMs == null || endMs == null) {
-    return {error: 'startIso and endIso must be valid ISO-8601 timestamps.'};
+    return { error: 'startIso and endIso must be valid ISO-8601 timestamps.' };
   }
   const group = typeof args.group === 'string' ? args.group : 'none';
   const topicFilter =
-    typeof args.topicFilter === 'string' ? args.topicFilter.toLowerCase() : null;
+    typeof args.topicFilter === 'string'
+      ? args.topicFilter.toLowerCase()
+      : null;
 
   const all = getAllPlanCalendarBlocks(context.timeline);
   const inRange = all
     .filter(block => blockOverlapsRange(block, startMs, endMs))
-    .filter(block => (topicFilter ? blockMatchesTopic(block, topicFilter) : true));
+    .filter(block =>
+      topicFilter ? blockMatchesTopic(block, topicFilter) : true,
+    );
 
   const totalMinutes = inRange.reduce(
     (sum, b) => sum + blockDurationMinutes(b),
@@ -227,16 +463,18 @@ function executeGetTotalTime(
   );
 
   if (group === 'none') {
-    return {totalMinutes, blockCount: inRange.length, breakdown: []};
+    return { totalMinutes, blockCount: inRange.length, breakdown: [] };
   }
 
-  const buckets = new Map<string, {minutes: number; blockCount: number}>();
+  const buckets = new Map<string, { minutes: number; blockCount: number }>();
   for (const block of inRange) {
     const minutes = blockDurationMinutes(block);
     const labels = bucketsForBlock(block, group);
     if (labels.length === 0) {
       const fallback =
-        group === 'day' ? toLocalDayKey(block.startTime, context.timezone) : '(unattributed)';
+        group === 'day'
+          ? toLocalDayKey(block.startTime, context.timezone)
+          : '(unattributed)';
       addToBucket(buckets, fallback, minutes);
       continue;
     }
@@ -255,7 +493,7 @@ function executeGetTotalTime(
     .slice(0, 20);
 
   return {
-    range: {startIso: args.startIso, endIso: args.endIso},
+    range: { startIso: args.startIso, endIso: args.endIso },
     topicFilter: topicFilter ?? null,
     group,
     totalMinutes,
@@ -274,7 +512,11 @@ function executeGetBlockDetails(
   if (typeof args.blockId === 'string' && args.blockId.length > 0) {
     block = all.find(candidate => candidate.id === args.blockId) ?? null;
   }
-  if (block == null && typeof args.query === 'string' && args.query.length > 0) {
+  if (
+    block == null &&
+    typeof args.query === 'string' &&
+    args.query.length > 0
+  ) {
     const q = args.query.toLowerCase();
     block =
       all
@@ -287,12 +529,14 @@ function executeGetBlockDetails(
   }
 
   if (block == null) {
-    return {error: 'No matching block found.'};
+    return { error: 'No matching block found.' };
   }
 
   const observations = block.summary.provenance.supportedByObservationIds
     .map(id => context.timeline.observationsById[id])
-    .filter((observation): observation is ObservationView => observation != null)
+    .filter(
+      (observation): observation is ObservationView => observation != null,
+    )
     .map(observation => ({
       observedAt: observation.observedAt,
       summary: observation.structured?.summary ?? observation.text,
@@ -316,6 +560,7 @@ function executeGetBlockDetails(
       narrative: block.summary.narrative,
       notes: block.notes ?? '',
       keyActivities: block.keyActivities ?? [],
+      nextActions: block.nextActions ?? [],
       artifacts: {
         apps: block.apps,
         repos: block.repos,
@@ -336,10 +581,12 @@ function executeGetObservationsInRange(
   const startMs = parseIsoSafe(args.startIso);
   const endMs = parseIsoSafe(args.endIso);
   if (startMs == null || endMs == null) {
-    return {error: 'startIso and endIso must be valid ISO-8601 timestamps.'};
+    return { error: 'startIso and endIso must be valid ISO-8601 timestamps.' };
   }
   const queryRaw =
-    typeof args.query === 'string' && args.query.length > 0 ? args.query.toLowerCase() : null;
+    typeof args.query === 'string' && args.query.length > 0
+      ? args.query.toLowerCase()
+      : null;
   const limit = Math.min(
     100,
     Math.max(1, typeof args.limit === 'number' ? Math.floor(args.limit) : 30),
@@ -358,8 +605,10 @@ function executeGetObservationsInRange(
     const observation = context.timeline.observationsById[observationId];
     if (observation == null || observation.deletedAt != null) continue;
     const observedMs = parseIsoSafe(observation.observedAt);
-    if (observedMs == null || observedMs < startMs || observedMs > endMs) continue;
-    if (queryRaw != null && !observationMatchesQuery(observation, queryRaw)) continue;
+    if (observedMs == null || observedMs < startMs || observedMs > endMs)
+      continue;
+    if (queryRaw != null && !observationMatchesQuery(observation, queryRaw))
+      continue;
 
     matches.push({
       observedAt: observation.observedAt,
@@ -374,7 +623,7 @@ function executeGetObservationsInRange(
   }
 
   return {
-    range: {startIso: args.startIso, endIso: args.endIso},
+    range: { startIso: args.startIso, endIso: args.endIso },
     query: queryRaw ?? null,
     observationCount: matches.length,
     observations: matches,
@@ -387,6 +636,52 @@ function parseIsoSafe(value: unknown): number | null {
   if (typeof value !== 'string') return null;
   const ms = Date.parse(value);
   return Number.isFinite(ms) ? ms : null;
+}
+
+function calendarEventOverlapsRange(
+  event: Pick<CalendarContextEvent, 'startTime' | 'endTime'>,
+  startMs: number,
+  endMs: number,
+): boolean {
+  const eventStart = Date.parse(event.startTime);
+  const eventEnd = Date.parse(event.endTime);
+  if (!Number.isFinite(eventStart) || !Number.isFinite(eventEnd)) return false;
+  return eventStart < endMs && eventEnd > startMs;
+}
+
+function computeFreeSlots(
+  startMs: number,
+  endMs: number,
+  busyEvents: CalendarContextEvent[],
+): Array<{ startTime: string; endTime: string; durationMinutes: number }> {
+  const slots: Array<{
+    startTime: string;
+    endTime: string;
+    durationMinutes: number;
+  }> = [];
+  let cursor = startMs;
+  for (const event of busyEvents) {
+    const eventStart = Math.max(Date.parse(event.startTime), startMs);
+    const eventEnd = Math.min(Date.parse(event.endTime), endMs);
+    if (!Number.isFinite(eventStart) || !Number.isFinite(eventEnd)) continue;
+    if (eventEnd <= cursor) continue;
+    if (eventStart > cursor) {
+      slots.push(makeSlot(cursor, eventStart));
+    }
+    cursor = Math.max(cursor, eventEnd);
+  }
+  if (cursor < endMs) {
+    slots.push(makeSlot(cursor, endMs));
+  }
+  return slots;
+}
+
+function makeSlot(startMs: number, endMs: number) {
+  return {
+    startTime: new Date(startMs).toISOString(),
+    endTime: new Date(endMs).toISOString(),
+    durationMinutes: Math.max(0, Math.round((endMs - startMs) / 60000)),
+  };
 }
 
 function blockOverlapsRange(
@@ -434,6 +729,7 @@ function summariseBlock(block: WorklogCalendarBlock) {
     narrative: block.summary.narrative,
     notes: truncate(block.notes ?? '', 1200),
     keyActivities: block.keyActivities ?? [],
+    nextActions: block.nextActions ?? [],
     artifacts: {
       apps: block.apps,
       repos: block.repos,
@@ -458,16 +754,16 @@ function blockDurationMinutes(block: WorklogCalendarBlock): number {
   return Math.round(ms / 60000);
 }
 
-function bucketsForBlock(
-  block: WorklogCalendarBlock,
-  group: string,
-): string[] {
+function bucketsForBlock(block: WorklogCalendarBlock, group: string): string[] {
   switch (group) {
     case 'project': {
       const labels: string[] = [];
       labels.push(...block.repos);
       if (labels.length === 0) labels.push(...block.documents.slice(0, 1));
-      if (labels.length === 0 && block.summary.provenance.keyArtifacts.length > 0) {
+      if (
+        labels.length === 0 &&
+        block.summary.provenance.keyArtifacts.length > 0
+      ) {
         labels.push(block.summary.provenance.keyArtifacts[0]);
       }
       return labels.slice(0, 1);
@@ -493,7 +789,7 @@ function toLocalDayKey(iso: string, timezone: string): string {
 }
 
 function addToBucket(
-  buckets: Map<string, {minutes: number; blockCount: number}>,
+  buckets: Map<string, { minutes: number; blockCount: number }>,
   label: string,
   minutes: number,
 ): void {
@@ -502,21 +798,21 @@ function addToBucket(
     existing.minutes += minutes;
     existing.blockCount += 1;
   } else {
-    buckets.set(label, {minutes, blockCount: 1});
+    buckets.set(label, { minutes, blockCount: 1 });
   }
 }
 
-function scoreBlockForQuery(
-  block: WorklogCalendarBlock,
-  q: string,
-): number {
+function scoreBlockForQuery(block: WorklogCalendarBlock, q: string): number {
   let score = 0;
   if (block.title.toLowerCase().includes(q)) score += 10;
   if (block.summary.narrative.toLowerCase().includes(q)) score += 5;
   if ((block.notes ?? '').toLowerCase().includes(q)) score += 4;
-  for (const item of block.repos) if (item.toLowerCase().includes(q)) score += 3;
-  for (const item of block.tickets) if (item.toLowerCase().includes(q)) score += 3;
-  for (const item of block.documents) if (item.toLowerCase().includes(q)) score += 2;
+  for (const item of block.repos)
+    if (item.toLowerCase().includes(q)) score += 3;
+  for (const item of block.tickets)
+    if (item.toLowerCase().includes(q)) score += 3;
+  for (const item of block.documents)
+    if (item.toLowerCase().includes(q)) score += 2;
   for (const item of block.summary.provenance.keyArtifacts) {
     if (item.toLowerCase().includes(q)) score += 2;
   }
@@ -537,4 +833,30 @@ function observationMatchesQuery(
     ...(observation.structured?.entities.documents ?? []),
   ];
   return fields.join(' ').toLowerCase().includes(query);
+}
+
+function meetingMatchesQuery(
+  meeting: {
+    title: string;
+    summary: string | null;
+    decisions: string[];
+    actionItems: string[];
+    followUps: string[];
+    questions: string[];
+    transcriptSnippets: Array<{ text: string }>;
+  },
+  query: string,
+): boolean {
+  return [
+    meeting.title,
+    meeting.summary ?? '',
+    ...meeting.decisions,
+    ...meeting.actionItems,
+    ...meeting.followUps,
+    ...meeting.questions,
+    ...meeting.transcriptSnippets.map(snippet => snippet.text),
+  ]
+    .join(' ')
+    .toLowerCase()
+    .includes(query);
 }

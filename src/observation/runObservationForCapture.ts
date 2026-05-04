@@ -3,9 +3,12 @@ import type {
   CaptureMetadataPayload,
   ContextSnapshotPayload,
 } from '../types/contextCapture';
-import {hasCapturePrivacyScreening} from '../privacy/redaction';
-import {generateObservation, DEFAULT_OBSERVATION_MODEL} from './geminiObservationEngine';
-import type {ObservationRun, StructuredObservation} from './types';
+import { hasCapturePrivacyScreening } from '../privacy/redaction';
+import {
+  generateObservation,
+  DEFAULT_OBSERVATION_MODEL,
+} from './geminiObservationEngine';
+import type { ObservationRun, StructuredObservation } from './types';
 
 export type ObservationCapturePreview = {
   dataUri: string | null;
@@ -61,7 +64,7 @@ export function validateCaptureForObservation(args: ObserveCaptureArgs): {
 export async function generateStructuredObservationForCapture(
   args: ObserveCaptureArgs,
 ): Promise<ObservationRun> {
-  const {imageBase64, imageMimeType} = validateCaptureForObservation(args);
+  const { imageBase64, imageMimeType } = validateCaptureForObservation(args);
 
   return generateObservation(
     {

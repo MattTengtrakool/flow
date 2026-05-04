@@ -34,11 +34,22 @@ export type WorklogCalendarBlock = {
   documents: string[];
   reasonCodes: string[];
   keyActivities?: string[];
+  nextActions?: string[];
+  calendarEventIds?: string[];
   category?: string;
   people?: string[];
   urls?: string[];
   notes?: string;
   notesKey?: string;
+  userCorrection?: {
+    title?: string;
+    category?: string;
+    markedWrong?: boolean;
+    feedback?: string;
+    mergeWithBlockId?: string;
+    splitAt?: string;
+    editedAt: string;
+  };
   continuityLinkage: {
     resumedFromLineageId: string | null;
     resumedSegmentCount: number;

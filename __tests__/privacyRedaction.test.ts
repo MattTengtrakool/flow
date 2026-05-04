@@ -2,7 +2,7 @@ import {
   redactSensitiveText,
   sanitizeInspection,
 } from '../src/privacy/redaction';
-import {validateCaptureForObservation} from '../src/observation/runObservationForCapture';
+import { validateCaptureForObservation } from '../src/observation/runObservationForCapture';
 
 describe('privacy redaction utilities', () => {
   test('redacts obvious secrets from text surfaces', () => {

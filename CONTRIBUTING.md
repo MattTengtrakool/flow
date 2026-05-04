@@ -5,20 +5,23 @@ Thanks for helping improve Flow.
 ## Setup
 
 ```bash
+corepack enable
 pnpm install
+cp .env.example .env
 pnpm native-capture:build
 pnpm start
 ```
+
+Set `GEMINI_API_KEY` in `.env` for observations, planner revisions, and chat.
+Set `ANTHROPIC_API_KEY` when you want to exercise the Claude planner fallback.
 
 ## Quality Gates
 
 Run these before opening a pull request:
 
 ```bash
-pnpm test
-pnpm lint
-pnpm typecheck
 pnpm native-capture:build
+pnpm check
 pnpm electron:build
 ```
 

@@ -1,4 +1,4 @@
-import type {WorklogCalendarBlock} from '../../src/worklog/types';
+import type { WorklogCalendarBlock } from '../../src/worklog/types';
 
 export type CalendarView = 'month' | 'week' | 'day';
 
@@ -47,11 +47,14 @@ export function monthGridDateIsos(anchorIso: string): string[] {
   return result;
 }
 
-export function dateRangeForView(view: CalendarView, anchorIso: string): string[] {
+export function dateRangeForView(
+  view: CalendarView,
+  anchorIso: string,
+): string[] {
   if (view === 'month') return monthGridDateIsos(anchorIso);
   if (view === 'week') {
     const start = mondayOfIso(anchorIso);
-    return Array.from({length: 7}, (_, index) => addDaysIso(start, index));
+    return Array.from({ length: 7 }, (_, index) => addDaysIso(start, index));
   }
   return [anchorIso];
 }

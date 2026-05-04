@@ -4,7 +4,10 @@ import type {
   CaptureTargetSummary,
   ContextSnapshotPayload,
 } from '../types/contextCapture';
-import type {ObservationRun, StructuredObservation} from '../observation/types';
+import type {
+  ObservationRun,
+  StructuredObservation,
+} from '../observation/types';
 
 const REDACTED = '[redacted]';
 
@@ -22,13 +25,12 @@ const INLINE_SECRET_PATTERNS: Array<[RegExp, string]> = [
     /\b(?:sk-[A-Za-z0-9]{16,}|gh[pousr]_[A-Za-z0-9]{20,}|AIza[0-9A-Za-z\-_]{20,}|AKIA[0-9A-Z]{16}|xox[baprs]-[A-Za-z0-9-]{10,})\b/g,
     '[redacted-token]',
   ],
-  [
-    /((?:[?&]|^)(?:token|key|password|secret|code)=)[^&\s]+/gi,
-    '$1[redacted]',
-  ],
+  [/((?:[?&]|^)(?:token|key|password|secret|code)=)[^&\s]+/gi, '$1[redacted]'],
 ];
 
-export function redactSensitiveText(value: string | null | undefined): string | null {
+export function redactSensitiveText(
+  value: string | null | undefined,
+): string | null {
   if (value == null) {
     return null;
   }
@@ -53,7 +55,8 @@ export function hasCapturePrivacyScreening(
   }
 
   return (
-    metadata.status !== 'captured' || metadata.privacyRedaction?.checked === true
+    metadata.status !== 'captured' ||
+    metadata.privacyRedaction?.checked === true
   );
 }
 
@@ -125,7 +128,8 @@ export function sanitizeStructuredObservation(
     ...observation,
     summary: redactSensitiveText(observation.summary) ?? REDACTED,
     taskHypothesis: redactSensitiveText(observation.taskHypothesis),
-    sensitivityReason: redactSensitiveText(observation.sensitivityReason) ?? REDACTED,
+    sensitivityReason:
+      redactSensitiveText(observation.sensitivityReason) ?? REDACTED,
     artifacts: sanitizeStringList(observation.artifacts),
     entities: {
       apps: sanitizeStringList(observation.entities.apps),

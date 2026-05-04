@@ -1,13 +1,16 @@
-import {memo, useMemo} from 'react';
+import { memo, useMemo } from 'react';
 
-import type {CostSummary} from '../../../src/planner/costSummary';
-import type {WorklogCalendarBlock} from '../../../src/worklog/types';
-import {focusedMinutes} from '../dateUtils';
-import {BlockCard} from '../components/BlockCard';
-import {MetricCard} from '../components/MetricCard';
-import {Screen} from '../components/common';
+import type { CostSummary } from '../../../src/planner/costSummary';
+import type { WorklogCalendarBlock } from '../../../src/worklog/types';
+import { focusedMinutes } from '../dateUtils';
+import { BlockCard } from '../components/BlockCard';
+import { MetricCard } from '../components/MetricCard';
+import { Screen } from '../components/common';
 
-function topValues(blocks: WorklogCalendarBlock[], getter: (block: WorklogCalendarBlock) => string[]) {
+function topValues(
+  blocks: WorklogCalendarBlock[],
+  getter: (block: WorklogCalendarBlock) => string[],
+) {
   const counts = new Map<string, number>();
   for (const block of blocks) {
     for (const value of getter(block)) {
@@ -25,19 +28,40 @@ export const InsightsScreen = memo(function InsightsScreen(props: {
   selectedBlockId: string | null;
   onSelectBlock: (block: WorklogCalendarBlock) => void;
 }) {
-  const minutes = useMemo(() => focusedMinutes(props.allBlocks), [props.allBlocks]);
-  const repos = useMemo(() => topValues(props.allBlocks, block => block.repos), [props.allBlocks]);
-  const tickets = useMemo(() => topValues(props.allBlocks, block => block.tickets), [props.allBlocks]);
+  const minutes = useMemo(
+    () => focusedMinutes(props.allBlocks),
+    [props.allBlocks],
+  );
+  const repos = useMemo(
+    () => topValues(props.allBlocks, block => block.repos),
+    [props.allBlocks],
+  );
+  const tickets = useMemo(
+    () => topValues(props.allBlocks, block => block.tickets),
+    [props.allBlocks],
+  );
 
   return (
     <Screen title="Insights">
       <div className="metric-grid">
         <MetricCard label="Blocks" value={String(props.allBlocks.length)} />
         <MetricCard label="Focused time" value={`${minutes}m`} />
-        <MetricCard label="Plan cost" value={`$${props.costSummary.allTime.costUsd.toFixed(4)}`} />
-        <MetricCard label="Last 7 days" value={`$${props.costSummary.last7Days.costUsd.toFixed(4)}`} />
-        <MetricCard label="Last 30 days" value={`$${props.costSummary.last30Days.costUsd.toFixed(4)}`} />
-        <MetricCard label="Priced plans" value={String(props.costSummary.pricedPlanCount)} />
+        <MetricCard
+          label="Plan cost"
+          value={`$${props.costSummary.allTime.costUsd.toFixed(4)}`}
+        />
+        <MetricCard
+          label="Last 7 days"
+          value={`$${props.costSummary.last7Days.costUsd.toFixed(4)}`}
+        />
+        <MetricCard
+          label="Last 30 days"
+          value={`$${props.costSummary.last30Days.costUsd.toFixed(4)}`}
+        />
+        <MetricCard
+          label="Priced plans"
+          value={String(props.costSummary.pricedPlanCount)}
+        />
       </div>
 
       <div className="insight-grid">

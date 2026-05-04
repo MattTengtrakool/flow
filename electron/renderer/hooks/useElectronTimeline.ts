@@ -1,7 +1,17 @@
-import {useCallback, useEffect, useMemo, useState} from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 
-import {createEmptyTimeline, type TimelineView} from '../../../src/timeline/eventLog';
-import type {FlowElectronApi, TimelineStatePayload} from '../../shared/flowApi';
+import {
+  createEmptyTimeline,
+  type TimelineView,
+} from '../../../src/timeline/eventLog';
+import type {
+  ApiKeyStatus,
+  AiConnectionMode,
+  ApiProvider,
+  FlowSettings,
+  FlowElectronApi,
+  TimelineStatePayload,
+} from '../../shared/flowApi';
 
 type HydrationStatus = 'loading' | 'ready' | 'error';
 
@@ -16,6 +26,7 @@ type StoreState = {
     enabled: boolean;
     currentMode: 'off' | 'capturing' | 'observing' | 'error';
     statusMessage: string;
+    lastCapturedAt: string | null;
     lastObservedAt: string | null;
     lastObservedFrameHash: string | null;
     consecutiveFailureCount: number;
@@ -25,7 +36,26 @@ type StoreState = {
     lastRunAt: string | null;
     lastSnapshotId: string | null;
     lastFailureMessage: string | null;
+    status: 'idle' | 'planning' | 'failed';
   };
+  privacyModeEnabled: boolean;
+  aiConnectionMode: AiConnectionMode;
+  selectedProvider: ApiProvider;
+  managedAi: FlowSettings['managedAi'];
+  apiKeyStatus: Record<ApiProvider, ApiKeyStatus>;
+  recentActivity: TimelineStatePayload['recentActivity'];
+  meetingDetection: TimelineStatePayload['meetingDetection'];
+  activeMeetingRecording: TimelineStatePayload['activeMeetingRecording'];
+  meetingTranscriptionStatus: TimelineStatePayload['meetingTranscriptionStatus'];
+};
+
+const missingApiKeyStatus: ApiKeyStatus = {
+  configured: false,
+  source: 'missing',
+  encrypted: false,
+  lastValidatedAt: null,
+  validationStatus: 'untested',
+  validationMessage: null,
 };
 
 function initialState(): StoreState {
@@ -40,6 +70,7 @@ function initialState(): StoreState {
       enabled: false,
       currentMode: 'off',
       statusMessage: 'Continuous capture is off.',
+      lastCapturedAt: null,
       lastObservedAt: null,
       lastObservedFrameHash: null,
       consecutiveFailureCount: 0,
@@ -49,7 +80,24 @@ function initialState(): StoreState {
       lastRunAt: null,
       lastSnapshotId: null,
       lastFailureMessage: null,
+      status: 'idle',
     },
+    privacyModeEnabled: false,
+    aiConnectionMode: 'managed',
+    selectedProvider: 'gemini',
+    managedAi: {
+      configured: false,
+      endpoint: null,
+      authenticated: false,
+    },
+    apiKeyStatus: {
+      gemini: missingApiKeyStatus,
+      anthropic: missingApiKeyStatus,
+    },
+    recentActivity: [],
+    meetingDetection: null,
+    activeMeetingRecording: null,
+    meetingTranscriptionStatus: 'idle',
   };
 }
 
@@ -63,18 +111,34 @@ function stateFromPayload(payload: TimelineStatePayload): StoreState {
     lastSavedAt: null,
     continuousModeState: {
       enabled: payload.captureEnabled,
-      currentMode: payload.captureEnabled ? 'capturing' : 'off',
+      currentMode: payload.privacyModeEnabled
+        ? 'off'
+        : payload.captureEnabled
+        ? 'capturing'
+        : 'off',
       statusMessage: payload.captureStatusMessage,
-      lastObservedAt: null,
+      lastCapturedAt: payload.lastCapturedAt,
+      lastObservedAt: payload.lastObservedAt,
       lastObservedFrameHash: null,
       consecutiveFailureCount: 0,
     },
     plannerRuntimeState: {
       inFlight: payload.plannerInFlight,
-      lastRunAt: null,
-      lastSnapshotId: null,
-      lastFailureMessage: payload.errorMessage,
+      lastRunAt: payload.plannerLastRunAt,
+      lastSnapshotId: payload.plannerLastSnapshotId,
+      lastFailureMessage:
+        payload.plannerLastFailureMessage ?? payload.errorMessage,
+      status: payload.plannerStatus,
     },
+    privacyModeEnabled: payload.privacyModeEnabled,
+    aiConnectionMode: payload.aiConnectionMode,
+    selectedProvider: payload.selectedProvider,
+    managedAi: payload.managedAi,
+    apiKeyStatus: payload.apiKeyStatus,
+    recentActivity: payload.recentActivity,
+    meetingDetection: payload.meetingDetection,
+    activeMeetingRecording: payload.activeMeetingRecording,
+    meetingTranscriptionStatus: payload.meetingTranscriptionStatus,
   };
 }
 
@@ -106,7 +170,9 @@ export function useElectronTimeline(flow: FlowElectronApi | undefined) {
             ...previous,
             hydrationStatus: 'error',
             errorMessage:
-              error instanceof Error ? error.message : 'Failed to load timeline.',
+              error instanceof Error
+                ? error.message
+                : 'Failed to load timeline.',
           }));
         }
       });

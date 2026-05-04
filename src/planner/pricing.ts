@@ -1,4 +1,4 @@
-import type {PlanUsageProvider} from './types';
+import type { PlanUsageProvider } from './types';
 
 export type ModelPricing = {
   inputPerMillion: number;
@@ -7,7 +7,7 @@ export type ModelPricing = {
   friendlyName: string;
 };
 
-const PRICING_TABLE: Array<{match: RegExp; pricing: ModelPricing}> = [
+const PRICING_TABLE: Array<{ match: RegExp; pricing: ModelPricing }> = [
   {
     match: /^gemini-2\.5-flash-lite/i,
     pricing: {
@@ -137,7 +137,7 @@ const PRICING_TABLE: Array<{match: RegExp; pricing: ModelPricing}> = [
 ];
 
 export function getModelPricing(model: string): ModelPricing | null {
-  for (const {match, pricing} of PRICING_TABLE) {
+  for (const { match, pricing } of PRICING_TABLE) {
     if (match.test(model)) return pricing;
   }
   return null;

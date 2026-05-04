@@ -1,4 +1,4 @@
-export function MarkdownText(props: {text: string}) {
+export function MarkdownText(props: { text: string }) {
   const lines = props.text.split('\n');
   return (
     <div className="markdown-text">

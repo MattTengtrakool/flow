@@ -1,9 +1,9 @@
-import {memo} from 'react';
+import { memo } from 'react';
 import type React from 'react';
 
-import type {NavKey, TimelineUiState} from '../types';
-import {DetailPanel} from './DetailPanel';
-import {Sidebar} from './Sidebar';
+import type { NavKey, TimelineUiState } from '../types';
+import { DetailPanel } from './DetailPanel';
+import { Sidebar } from './Sidebar';
 
 type DetailProps = React.ComponentProps<typeof DetailPanel>;
 

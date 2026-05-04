@@ -1,6 +1,6 @@
-import type {StructuredObservation} from '../../src/observation/types';
-import type {TaskPlanSnapshot} from '../../src/planner/types';
-import type {DomainEvent} from '../../src/timeline/eventLog';
+import type { StructuredObservation } from '../../src/observation/types';
+import type { TaskPlanSnapshot } from '../../src/planner/types';
+import type { DomainEvent } from '../../src/timeline/eventLog';
 import type {
   CaptureInspectionPayload,
   CaptureMetadataPayload,
@@ -17,7 +17,7 @@ export const migrationContextSnapshot: ContextSnapshotPayload = {
   bundleIdentifier: 'com.todesktop.cursor',
   processId: 4242,
   windowTitle: 'PAY-193 retry.ts - Cursor',
-  windowFrame: {x: 80, y: 90, width: 1440, height: 900},
+  windowFrame: { x: 80, y: 90, width: 1440, height: 900 },
   source: 'window',
   preciseModeEnabled: true,
   accessibilityTrusted: true,
@@ -43,7 +43,7 @@ export const migrationCaptureInspection: CaptureInspectionPayload = {
     windowId: 99,
     windowTitle: 'PAY-193 retry.ts - Cursor',
     displayId: 1,
-    frame: {x: 80, y: 90, width: 1440, height: 900},
+    frame: { x: 80, y: 90, width: 1440, height: 900 },
   },
   candidates: [
     {
@@ -54,7 +54,7 @@ export const migrationCaptureInspection: CaptureInspectionPayload = {
       windowId: 99,
       windowTitle: 'PAY-193 retry.ts - Cursor',
       displayId: 1,
-      frame: {x: 80, y: 90, width: 1440, height: 900},
+      frame: { x: 80, y: 90, width: 1440, height: 900 },
       score: 113,
       reasons: ['pid-match', 'title-match', 'frontmost-app', 'onscreen'],
       isOnScreen: true,
@@ -76,8 +76,7 @@ export const migrationCaptureMetadata: CaptureMetadataPayload = {
   confidence: 0.94,
   width: 1440,
   height: 900,
-  frameHash:
-    '7ef4d3df8a6ff70ac65a1a4211dc1e0d807819ca3ac7d2929dc1b28ee97d9056',
+  frameHash: '7ef4d3df8a6ff70ac65a1a4211dc1e0d807819ca3ac7d2929dc1b28ee97d9056',
   perceptualHash: '0f0f1f1f3f3f7f7f',
   errorMessage: null,
   previewByteLength: 123456,

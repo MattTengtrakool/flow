@@ -42,7 +42,9 @@ describe('replayEventLog', () => {
     const timeline = replayEventLog(eventLog);
 
     expect(timeline.currentSessionId).toBe('session_1');
-    expect(timeline.sessionsById.session_1.title).toBe('Morning Planning Session');
+    expect(timeline.sessionsById.session_1.title).toBe(
+      'Morning Planning Session',
+    );
     expect(timeline.sessionsById.session_1.observationIds).toEqual([
       'observation_1',
     ]);
@@ -110,6 +112,176 @@ describe('stepEvent', () => {
     expect(EMPTY_TIMELINE.sessionsById).toEqual({});
     expect(result.sessionOrder).toEqual(['session_1']);
     expect(result).not.toBe(EMPTY_TIMELINE);
+  });
+
+  test('replays append-only block correction events', () => {
+    const eventLog: DomainEvent[] = [
+      {
+        id: 'e-correction',
+        type: 'user_block_corrected',
+        blockId: 'block_1',
+        notesKey: 'obs_1|obs_2',
+        title: 'Corrected title',
+        category: 'planning',
+        markedWrong: true,
+        feedback: 'This was planning, not coding.',
+        occurredAt: '2026-04-12T15:20:00.000Z',
+      },
+    ];
+
+    const timeline = replayEventLog(eventLog);
+
+    expect(timeline.userBlockCorrections['obs_1|obs_2']).toMatchObject({
+      blockId: 'block_1',
+      title: 'Corrected title',
+      category: 'planning',
+      markedWrong: true,
+      feedback: 'This was planning, not coding.',
+      editedAt: '2026-04-12T15:20:00.000Z',
+    });
+  });
+
+  test('replays proactive insight lifecycle events', () => {
+    const eventLog: DomainEvent[] = [
+      {
+        id: 'e-proactive',
+        type: 'proactive_insight_generated',
+        occurredAt: '2026-05-02T16:50:00.000Z',
+        insight: {
+          id: 'insight_meeting',
+          kind: 'pre_meeting_brief',
+          title: 'Prep for design review',
+          body: 'Starts in 10 min.',
+          reason: 'Upcoming calendar event overlaps recent Flow work.',
+          priority: 'normal',
+          relatedBlockIds: ['block_1'],
+          relatedCalendarEventIds: ['calendar_event_1'],
+          relatedArtifactIds: ['Design doc'],
+          relatedObservationIds: ['obs_1'],
+          actions: [{ id: 'dismiss', label: 'Dismiss', kind: 'dismiss' }],
+          primaryAction: { id: 'open_flow', label: 'Open Flow', kind: 'open' },
+          displayMode: 'brief',
+          generatedAt: '2026-05-02T16:50:00.000Z',
+        },
+      },
+      {
+        id: 'e-snooze',
+        type: 'proactive_insight_snoozed',
+        insightId: 'insight_meeting',
+        snoozedUntil: '2026-05-02T17:00:00.000Z',
+        occurredAt: '2026-05-02T16:51:00.000Z',
+      },
+      {
+        id: 'e-dismiss',
+        type: 'proactive_insight_dismissed',
+        insightId: 'insight_meeting',
+        occurredAt: '2026-05-02T16:55:00.000Z',
+      },
+    ];
+
+    const timeline = replayEventLog(eventLog);
+
+    expect(timeline.proactiveInsightOrder).toEqual(['insight_meeting']);
+    expect(timeline.proactiveInsightsById.insight_meeting).toMatchObject({
+      title: 'Prep for design review',
+      reason: 'Upcoming calendar event overlaps recent Flow work.',
+      relatedArtifactIds: ['Design doc'],
+      relatedObservationIds: ['obs_1'],
+      displayMode: 'brief',
+      status: 'dismissed',
+      dismissedAt: '2026-05-02T16:55:00.000Z',
+    });
+  });
+
+  test('replays meeting transcription events without mutating snapshots', () => {
+    const eventLog: DomainEvent[] = [
+      {
+        id: 'e-detect',
+        type: 'meeting_detected',
+        occurredAt: '2026-05-02T17:00:00.000Z',
+        detection: {
+          id: 'meeting_detection_1',
+          dedupeKey: 'zoom:weekly-sync:calendar:1',
+          detectedAt: '2026-05-02T17:00:00.000Z',
+          expiresAt: '2026-05-02T17:10:00.000Z',
+          score: 0.94,
+          confidence: 'high',
+          appName: 'zoom.us',
+          bundleIdentifier: 'us.zoom.xos',
+          windowTitle: 'Zoom Meeting',
+          calendarEventId: 'calendar_event_1',
+          calendarEventTitle: 'Weekly sync',
+          calendarEventStartTime: '2026-05-02T17:00:00.000Z',
+          calendarEventEndTime: '2026-05-02T17:30:00.000Z',
+          reasons: ['Zoom is the active app.'],
+        },
+      },
+      {
+        id: 'e-start',
+        type: 'meeting_transcription_started',
+        occurredAt: '2026-05-02T17:01:00.000Z',
+        recording: {
+          id: 'recording_1',
+          meetingId: 'meeting_1',
+          detectionId: 'meeting_detection_1',
+          startedAt: '2026-05-02T17:01:00.000Z',
+          stoppedAt: null,
+          status: 'starting',
+          appName: 'zoom.us',
+          bundleIdentifier: 'us.zoom.xos',
+          windowTitle: 'Zoom Meeting',
+          calendarEventId: 'calendar_event_1',
+          sources: ['system'],
+          rawAudioSaved: false,
+          errorMessage: null,
+        },
+      },
+      {
+        id: 'e-transcript',
+        type: 'meeting_transcript_chunk_added',
+        occurredAt: '2026-05-02T17:01:20.000Z',
+        chunk: {
+          id: 'transcript_1',
+          meetingId: 'meeting_1',
+          chunkId: 'chunk_1',
+          startedAt: '2026-05-02T17:01:00.000Z',
+          endedAt: '2026-05-02T17:01:15.000Z',
+          text: 'We decided to ship the beta next week.',
+          speakerLabel: null,
+          confidence: 0.91,
+          language: 'en',
+          source: 'system',
+          transcribedAt: '2026-05-02T17:01:20.000Z',
+        },
+      },
+      {
+        id: 'e-summary',
+        type: 'meeting_summary_generated',
+        occurredAt: '2026-05-02T17:35:00.000Z',
+        summary: {
+          id: 'meeting_summary_1',
+          meetingId: 'meeting_1',
+          generatedAt: '2026-05-02T17:35:00.000Z',
+          title: 'Weekly sync',
+          summary: 'The team agreed to ship the beta next week.',
+          decisions: ['Ship the beta next week.'],
+          actionItems: ['Prepare beta checklist.'],
+          followUps: [],
+          questions: [],
+        },
+      },
+    ];
+
+    const timeline = replayEventLog(eventLog);
+
+    expect(timeline.meetingDetectionOrder).toEqual(['meeting_detection_1']);
+    expect(timeline.meetingRecordingsById.meeting_1.status).toBe('stopped');
+    expect(timeline.meetingTranscriptChunksByMeetingId.meeting_1).toHaveLength(
+      1,
+    );
+    expect(timeline.meetingSummariesByMeetingId.meeting_1.title).toBe(
+      'Weekly sync',
+    );
   });
 
   test('updating an existing session clones the session entry', () => {

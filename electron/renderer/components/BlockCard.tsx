@@ -1,9 +1,12 @@
-import {memo} from 'react';
+import { memo } from 'react';
 
-import type {WorklogCalendarBlock} from '../../../src/worklog/types';
-import {focusedMinutes} from '../dateUtils';
+import type { WorklogCalendarBlock } from '../../../src/worklog/types';
+import { focusedMinutes } from '../dateUtils';
 
-const timeFormatter = new Intl.DateTimeFormat([], {hour: 'numeric', minute: '2-digit'});
+const timeFormatter = new Intl.DateTimeFormat([], {
+  hour: 'numeric',
+  minute: '2-digit',
+});
 
 export const BlockCard = memo(function BlockCard(props: {
   block: WorklogCalendarBlock;
@@ -11,7 +14,7 @@ export const BlockCard = memo(function BlockCard(props: {
   compact?: boolean;
   onSelect: (block: WorklogCalendarBlock) => void;
 }) {
-  const {block, selected = false, compact = false, onSelect} = props;
+  const { block, selected = false, compact = false, onSelect } = props;
   const start = timeFormatter.format(new Date(block.startTime));
   const end = timeFormatter.format(new Date(block.endTime));
   const minutes = focusedMinutes([block]);
@@ -27,7 +30,8 @@ export const BlockCard = memo(function BlockCard(props: {
       ]
         .filter(Boolean)
         .join(' ')}
-      onClick={() => onSelect(block)}>
+      onClick={() => onSelect(block)}
+    >
       <span className="block-card__stripe" />
       <span className="block-card__time">
         {start} - {end} · {minutes}m

@@ -1,7 +1,10 @@
-import {BrowserWindow, ipcMain} from 'electron';
+import { BrowserWindow, ipcMain } from 'electron';
 
-import type {ContextSnapshotPayload} from '../../../src/types/contextCapture';
-import {NativeCaptureClient, type MonitoringOptions} from './nativeCaptureClient';
+import type { ContextSnapshotPayload } from '../../../src/types/contextCapture';
+import {
+  NativeCaptureClient,
+  type MonitoringOptions,
+} from './nativeCaptureClient';
 
 export const captureClient = new NativeCaptureClient();
 
@@ -14,13 +17,15 @@ captureClient.on('contextSnapshotDidChange', snapshot => {
 export function registerCaptureIpcHandlers() {
   ipcMain.handle(
     'flow:capture:startMonitoring',
-    (_event, options: MonitoringOptions) => captureClient.startMonitoring(options),
+    (_event, options: MonitoringOptions) =>
+      captureClient.startMonitoring(options),
   );
   ipcMain.handle('flow:capture:stopMonitoring', () =>
     captureClient.stopMonitoring(),
   );
-  ipcMain.handle('flow:capture:setPreciseModeEnabled', (_event, enabled: boolean) =>
-    captureClient.setPreciseModeEnabled(enabled),
+  ipcMain.handle(
+    'flow:capture:setPreciseModeEnabled',
+    (_event, enabled: boolean) => captureClient.setPreciseModeEnabled(enabled),
   );
   ipcMain.handle('flow:capture:requestAccessibilityPrompt', () =>
     captureClient.requestAccessibilityPrompt(),
@@ -37,4 +42,6 @@ export function registerCaptureIpcHandlers() {
   ipcMain.handle('flow:capture:captureNow', () => captureClient.captureNow());
 }
 
-export type ContextSnapshotListener = (snapshot: ContextSnapshotPayload) => void;
+export type ContextSnapshotListener = (
+  snapshot: ContextSnapshotPayload,
+) => void;

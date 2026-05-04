@@ -5,18 +5,18 @@ import {
   type ObservationView,
   type TimelineView,
 } from '../src/timeline/eventLog';
-import {condenseObservations} from '../src/planner/condenseObservations';
+import { condenseObservations } from '../src/planner/condenseObservations';
 import {
   isWellFormedTaskHeadline,
   pruneOutlierObservationIds,
   runPlannerRevision,
 } from '../src/planner/revisionEngine';
-import {getDayWorklog} from '../src/planner/selectors';
+import { getDayWorklog } from '../src/planner/selectors';
 import {
   PLANNER_PROMPT_VERSION,
   type TaskPlanSnapshot,
 } from '../src/planner/types';
-import type {StructuredObservation} from '../src/observation/types';
+import type { StructuredObservation } from '../src/observation/types';
 
 const WINDOW_MS = 6 * 60 * 60 * 1000;
 
@@ -47,7 +47,7 @@ function makeObservation(overrides: {
   return {
     id: overrides.id,
     text: base.summary,
-    structured: {...base, ...overrides.structured},
+    structured: { ...base, ...overrides.structured },
     observedAt: overrides.observedAt,
   };
 }
@@ -110,7 +110,9 @@ describe('condenseObservations', () => {
       observations.push(
         makeObservation({
           id: `obs_${i}`,
-          observedAt: new Date(1_700_000_000_000 + i * 5 * 60_000).toISOString(),
+          observedAt: new Date(
+            1_700_000_000_000 + i * 5 * 60_000,
+          ).toISOString(),
           structured: {
             taskHypothesis: `task-${i}`,
             summary: `summary ${i}`,
@@ -119,7 +121,7 @@ describe('condenseObservations', () => {
       );
     }
 
-    const clusters = condenseObservations(observations, {maxEntries: 40});
+    const clusters = condenseObservations(observations, { maxEntries: 40 });
 
     expect(clusters.length).toBeLessThanOrEqual(40);
     const total = clusters.reduce((sum, c) => sum + c.occurrenceCount, 0);
@@ -131,12 +133,12 @@ describe('condenseObservations', () => {
       makeObservation({
         id: 'obs_1',
         observedAt: '2026-04-17T10:00:00.000Z',
-        structured: {taskHypothesis: 'Fix PAY-193'},
+        structured: { taskHypothesis: 'Fix PAY-193' },
       }),
       makeObservation({
         id: 'obs_2',
         observedAt: '2026-04-17T10:00:30.000Z',
-        structured: {taskHypothesis: 'Draft quarterly report'},
+        structured: { taskHypothesis: 'Draft quarterly report' },
       }),
     ];
 
@@ -169,8 +171,8 @@ describe('runPlannerRevision', () => {
 
   test('returns skipped when no new observations since the last snapshot', async () => {
     const observations = [
-      makeObservation({id: 'obs_1', observedAt: '2026-04-17T12:00:00.000Z'}),
-      makeObservation({id: 'obs_2', observedAt: '2026-04-17T12:05:00.000Z'}),
+      makeObservation({ id: 'obs_1', observedAt: '2026-04-17T12:00:00.000Z' }),
+      makeObservation({ id: 'obs_2', observedAt: '2026-04-17T12:05:00.000Z' }),
     ];
     const priorSnapshot: TaskPlanSnapshot = {
       snapshotId: 'snap_1',
@@ -226,8 +228,8 @@ describe('runPlannerRevision', () => {
 
   test('emits a task_plan_revised event on success', async () => {
     const observations = [
-      makeObservation({id: 'obs_1', observedAt: '2026-04-17T13:00:00.000Z'}),
-      makeObservation({id: 'obs_2', observedAt: '2026-04-17T13:05:00.000Z'}),
+      makeObservation({ id: 'obs_1', observedAt: '2026-04-17T13:00:00.000Z' }),
+      makeObservation({ id: 'obs_2', observedAt: '2026-04-17T13:05:00.000Z' }),
     ];
     const timeline = timelineWithObservations(observations);
 
@@ -280,9 +282,170 @@ describe('runPlannerRevision', () => {
     expect(result.snapshot.sessionId).toBe('session_1');
   });
 
+  test('passes user correction hints into the planner input', async () => {
+    const observations = [
+      makeObservation({ id: 'obs_1', observedAt: '2026-04-17T12:00:00.000Z' }),
+      makeObservation({ id: 'obs_2', observedAt: '2026-04-17T12:05:00.000Z' }),
+      makeObservation({ id: 'obs_3', observedAt: '2026-04-17T13:00:00.000Z' }),
+    ];
+    const priorSnapshot: TaskPlanSnapshot = {
+      snapshotId: 'snap_1',
+      revisedAt: '2026-04-17T12:10:00.000Z',
+      windowStartAt: '2026-04-17T06:10:00.000Z',
+      windowEndAt: '2026-04-17T12:10:00.000Z',
+      sessionId: 'session_1',
+      blocks: [
+        {
+          id: 'block_1',
+          startAt: '2026-04-17T12:00:00.000Z',
+          endAt: '2026-04-17T12:10:00.000Z',
+          headline: 'Old retry headline',
+          narrative: 'Old narrative.',
+          label: 'worked_on',
+          category: 'coding',
+          confidence: 0.8,
+          keyActivities: ['Edited retry.ts'],
+          artifacts: {
+            apps: ['Cursor'],
+            repositories: ['payments-service'],
+            urls: [],
+            tickets: ['PAY-193'],
+            documents: ['retry.ts'],
+            people: [],
+          },
+          reasonCodes: ['coding'],
+          sourceObservationIds: ['obs_1', 'obs_2'],
+        },
+      ],
+      model: 'test',
+      promptVersion: PLANNER_PROMPT_VERSION,
+      durationMs: 100,
+      inputObservationCount: 2,
+      inputClusterCount: 1,
+      previousSnapshotId: null,
+      cause: 'cadence',
+    };
+    const timeline = {
+      ...timelineWithObservations(observations, [priorSnapshot]),
+      userBlockCorrections: {
+        'obs_1|obs_2': {
+          blockId: 'block_1',
+          notesKey: 'obs_1|obs_2',
+          title: 'PAY-193 retry flow',
+          category: 'planning',
+          markedWrong: true,
+          feedback: 'This was planning work.',
+          editedAt: '2026-04-17T12:15:00.000Z',
+        },
+      },
+    };
+
+    const result = await runPlannerRevision({
+      timeline,
+      now,
+      cause: 'manual',
+      force: true,
+      windowMs: WINDOW_MS,
+      runReplan: async input => {
+        expect(input.correctionHints).toEqual([
+          {
+            blockId: 'block_1',
+            sourceObservationIds: ['obs_1', 'obs_2'],
+            title: 'PAY-193 retry flow',
+            category: 'planning',
+            markedWrong: true,
+            feedback: 'This was planning work.',
+          },
+        ]);
+        return {
+          model: 'stub-model',
+          promptVersion: PLANNER_PROMPT_VERSION,
+          durationMs: 100,
+          blocks: [],
+        };
+      },
+    });
+
+    expect(result.kind).toBe('success');
+  });
+
+  test('passes calendar context and preserves calendar links on blocks', async () => {
+    const observations = [
+      makeObservation({ id: 'obs_1', observedAt: '2026-04-17T13:00:00.000Z' }),
+    ];
+    const timeline = timelineWithObservations(observations);
+
+    const result = await runPlannerRevision({
+      timeline,
+      now,
+      cause: 'manual',
+      force: true,
+      windowMs: WINDOW_MS,
+      calendarContext: {
+        windowStartAt: '2026-04-17T08:00:00.000Z',
+        windowEndAt: '2026-04-17T14:00:00.000Z',
+        events: [
+          {
+            id: 'calendar_event_launch_sync',
+            title: 'Launch sync',
+            startTime: '2026-04-17T13:00:00.000Z',
+            endTime: '2026-04-17T13:30:00.000Z',
+            allDay: false,
+            busy: true,
+            eventType: 'default',
+            mode: 'scheduled',
+            sourceSummary: 'Primary',
+          },
+        ],
+      },
+      runReplan: async input => {
+        expect(input.calendarContext?.events[0].title).toBe('Launch sync');
+        return {
+          model: 'stub-model',
+          promptVersion: PLANNER_PROMPT_VERSION,
+          durationMs: 100,
+          blocks: [
+            {
+              startAt: '2026-04-17T13:00:00.000Z',
+              endAt: '2026-04-17T13:15:00.000Z',
+              headline: 'Launch sync',
+              narrative: 'Reviewed launch follow-ups from the meeting.',
+              notes: '- Reviewed **Launch sync** follow-ups',
+              label: 'reviewed' as const,
+              category: 'meeting' as const,
+              confidence: 0.82,
+              keyActivities: ['Reviewed launch follow-ups'],
+              nextActions: ['Send launch notes'],
+              calendarEventIds: ['calendar_event_launch_sync'],
+              artifacts: {
+                apps: ['Google Meet'],
+                repositories: [],
+                urls: [],
+                tickets: [],
+                documents: [],
+                people: [],
+              },
+              reasonCodes: ['calendar_overlap'],
+              sourceObservationIds: ['obs_1'],
+            },
+          ],
+        };
+      },
+    });
+
+    expect(result.kind).toBe('success');
+    if (result.kind !== 'success') return;
+    expect(result.snapshot.blocks[0].calendarEventIds).toEqual([
+      'calendar_event_launch_sync',
+    ]);
+    expect(result.snapshot.blocks[0].nextActions).toEqual([
+      'Send launch notes',
+    ]);
+  });
+
   test('emits a task_plan_revision_failed event when the engine throws', async () => {
     const observations = [
-      makeObservation({id: 'obs_1', observedAt: '2026-04-17T13:00:00.000Z'}),
+      makeObservation({ id: 'obs_1', observedAt: '2026-04-17T13:00:00.000Z' }),
     ];
     const timeline = timelineWithObservations(observations);
 
@@ -428,11 +591,68 @@ describe('getDayWorklog', () => {
       planSnapshots: [snapshot],
     };
 
-    const worklog = getDayWorklog(timeline, '2026-04-17T09:00:00.000Z', timezone);
+    const worklog = getDayWorklog(
+      timeline,
+      '2026-04-17T09:00:00.000Z',
+      timezone,
+    );
     expect(worklog.blocks).toHaveLength(1);
     expect(worklog.blocks[0].title).toBe('Triage inbox');
     expect(worklog.blocks[0].summary.narrative.length).toBeGreaterThan(10);
-    expect(worklog.blocks[0].summary.provenance.supportedByObservationIds).toEqual(['obs_1']);
+    expect(
+      worklog.blocks[0].summary.provenance.supportedByObservationIds,
+    ).toEqual(['obs_1']);
+  });
+
+  test('overlays user title and category corrections at read time', () => {
+    const snapshot = makeSnapshot({
+      snapshotId: 'snap_corrected',
+      windowStartAt: '2026-04-17T08:00:00.000Z',
+      windowEndAt: '2026-04-17T14:00:00.000Z',
+      blocks: [
+        {
+          id: 'block_corrected',
+          startAt: '2026-04-17T09:00:00.000Z',
+          endAt: '2026-04-17T10:00:00.000Z',
+          headline: 'Generic coding',
+          narrative: 'Worked in the editor.',
+          label: 'worked_on',
+          category: 'coding',
+          confidence: 0.8,
+          keyActivities: [],
+          artifacts: {
+            apps: ['Cursor'],
+            repositories: [],
+            urls: [],
+            tickets: [],
+            documents: [],
+            people: [],
+          },
+          reasonCodes: [],
+          sourceObservationIds: ['obs_a', 'obs_b'],
+        },
+      ],
+    });
+    const timeline: TimelineView = {
+      ...EMPTY_TIMELINE,
+      planSnapshots: [snapshot],
+      userBlockCorrections: {
+        'obs_a|obs_b': {
+          blockId: 'block_corrected',
+          notesKey: 'obs_a|obs_b',
+          title: 'PAY-193 retry flow',
+          category: 'planning',
+          editedAt: '2026-04-17T10:10:00.000Z',
+        },
+      },
+    };
+
+    const worklog = getDayWorklog(timeline, '2026-04-17', timezone);
+
+    expect(snapshot.blocks[0].headline).toBe('Generic coding');
+    expect(worklog.blocks[0].title).toBe('PAY-193 retry flow');
+    expect(worklog.blocks[0].summary.headline).toBe('PAY-193 retry flow');
+    expect(worklog.blocks[0].category).toBe('planning');
   });
 
   test('most recent snapshot overrides older snapshots for overlapping windows', () => {
@@ -446,7 +666,8 @@ describe('getDayWorklog', () => {
           startAt: '2026-04-17T09:00:00.000Z',
           endAt: '2026-04-17T10:00:00.000Z',
           headline: 'Old headline',
-          narrative: 'Old narrative that should be overridden by the newer snapshot.',
+          narrative:
+            'Old narrative that should be overridden by the newer snapshot.',
           label: 'worked_on',
           category: 'coding',
           confidence: 0.6,
@@ -499,7 +720,11 @@ describe('getDayWorklog', () => {
       planSnapshots: [older, newer],
     };
 
-    const worklog = getDayWorklog(timeline, '2026-04-17T09:00:00.000Z', timezone);
+    const worklog = getDayWorklog(
+      timeline,
+      '2026-04-17T09:00:00.000Z',
+      timezone,
+    );
     expect(worklog.blocks).toHaveLength(1);
     expect(worklog.blocks[0].title).toBe('Refined headline');
   });
@@ -544,7 +769,8 @@ describe('getDayWorklog', () => {
           startAt: '2026-04-17T13:00:00.000Z',
           endAt: '2026-04-17T14:00:00.000Z',
           headline: 'Afternoon coding',
-          narrative: "Implemented the login flow redesign based on Nikki's feedback.",
+          narrative:
+            "Implemented the login flow redesign based on Nikki's feedback.",
           label: 'worked_on',
           category: 'coding',
           confidence: 0.85,
@@ -568,7 +794,11 @@ describe('getDayWorklog', () => {
       planSnapshots: [frozen, live],
     };
 
-    const worklog = getDayWorklog(timeline, '2026-04-17T10:00:00.000Z', timezone);
+    const worklog = getDayWorklog(
+      timeline,
+      '2026-04-17T10:00:00.000Z',
+      timezone,
+    );
     expect(worklog.blocks).toHaveLength(2);
     expect(worklog.blocks[0].title).toBe('Morning research');
     expect(worklog.blocks[1].title).toBe('Afternoon coding');
@@ -577,14 +807,22 @@ describe('getDayWorklog', () => {
 
 describe('headline task-anchoring', () => {
   test('rejects gerund-first headlines', () => {
-    expect(isWellFormedTaskHeadline('Reviewing Hestia PR #34619 Status')).toBe(false);
+    expect(isWellFormedTaskHeadline('Reviewing Hestia PR #34619 Status')).toBe(
+      false,
+    );
     expect(isWellFormedTaskHeadline('Debugging retry flow')).toBe(false);
-    expect(isWellFormedTaskHeadline('Configuring Olympus Environment & Git')).toBe(false);
-    expect(isWellFormedTaskHeadline('Developing & Reviewing Launch Workflows')).toBe(false);
+    expect(
+      isWellFormedTaskHeadline('Configuring Olympus Environment & Git'),
+    ).toBe(false);
+    expect(
+      isWellFormedTaskHeadline('Developing & Reviewing Launch Workflows'),
+    ).toBe(false);
   });
 
   test('rejects activity-and-activity compounds', () => {
-    expect(isWellFormedTaskHeadline('Refactoring & Reviewing code')).toBe(false);
+    expect(isWellFormedTaskHeadline('Refactoring & Reviewing code')).toBe(
+      false,
+    );
     expect(isWellFormedTaskHeadline('Reviewing and testing PRs')).toBe(false);
   });
 
@@ -596,9 +834,13 @@ describe('headline task-anchoring', () => {
 
   test('accepts task-anchored headlines', () => {
     expect(isWellFormedTaskHeadline('PAY-193 retry flow')).toBe(true);
-    expect(isWellFormedTaskHeadline('Pre-consultation form for launch portal')).toBe(true);
+    expect(
+      isWellFormedTaskHeadline('Pre-consultation form for launch portal'),
+    ).toBe(true);
     expect(isWellFormedTaskHeadline('hestia PR #34619 review')).toBe(true);
-    expect(isWellFormedTaskHeadline('Brand dedup by viewer role (PR #34603)')).toBe(true);
+    expect(
+      isWellFormedTaskHeadline('Brand dedup by viewer role (PR #34603)'),
+    ).toBe(true);
     expect(isWellFormedTaskHeadline('Weekly Launch Product Sync')).toBe(true);
     expect(isWellFormedTaskHeadline('Q2 strategy brief')).toBe(true);
   });
@@ -608,7 +850,7 @@ describe('headline task-anchoring', () => {
       makeObservation({
         id: 'obs_1',
         observedAt: '2026-04-17T13:00:00.000Z',
-        structured: {taskHypothesis: 'Fix PAY-193 retry flow'},
+        structured: { taskHypothesis: 'Fix PAY-193 retry flow' },
       }),
     ];
     const timeline = timelineWithObservations(observations);
@@ -755,7 +997,9 @@ describe('headline task-anchoring', () => {
 });
 
 describe('pruneOutlierObservationIds', () => {
-  function indexOf(observations: ObservationView[]): Map<string, ObservationView> {
+  function indexOf(
+    observations: ObservationView[],
+  ): Map<string, ObservationView> {
     const map = new Map<string, ObservationView>();
     for (const observation of observations) {
       map.set(observation.id, observation);
@@ -765,9 +1009,9 @@ describe('pruneOutlierObservationIds', () => {
 
   test('returns input unchanged when observations are clustered together', () => {
     const observations = [
-      makeObservation({id: 'obs_1', observedAt: '2026-04-22T19:57:00.000Z'}),
-      makeObservation({id: 'obs_2', observedAt: '2026-04-22T19:58:00.000Z'}),
-      makeObservation({id: 'obs_3', observedAt: '2026-04-22T20:02:00.000Z'}),
+      makeObservation({ id: 'obs_1', observedAt: '2026-04-22T19:57:00.000Z' }),
+      makeObservation({ id: 'obs_2', observedAt: '2026-04-22T19:58:00.000Z' }),
+      makeObservation({ id: 'obs_3', observedAt: '2026-04-22T20:02:00.000Z' }),
     ];
     const ids = observations.map(o => o.id);
     const result = pruneOutlierObservationIds(ids, indexOf(observations));
@@ -776,10 +1020,13 @@ describe('pruneOutlierObservationIds', () => {
 
   test('drops a lone observation isolated by a 40-minute gap', () => {
     const observations = [
-      makeObservation({id: 'obs_1', observedAt: '2026-04-22T19:57:00.000Z'}),
-      makeObservation({id: 'obs_2', observedAt: '2026-04-22T19:58:00.000Z'}),
-      makeObservation({id: 'obs_3', observedAt: '2026-04-22T20:02:00.000Z'}),
-      makeObservation({id: 'obs_stray', observedAt: '2026-04-22T20:43:00.000Z'}),
+      makeObservation({ id: 'obs_1', observedAt: '2026-04-22T19:57:00.000Z' }),
+      makeObservation({ id: 'obs_2', observedAt: '2026-04-22T19:58:00.000Z' }),
+      makeObservation({ id: 'obs_3', observedAt: '2026-04-22T20:02:00.000Z' }),
+      makeObservation({
+        id: 'obs_stray',
+        observedAt: '2026-04-22T20:43:00.000Z',
+      }),
     ];
     const ids = observations.map(o => o.id);
     const result = pruneOutlierObservationIds(ids, indexOf(observations));
@@ -788,12 +1035,18 @@ describe('pruneOutlierObservationIds', () => {
 
   test('keeps the larger of two separated clusters', () => {
     const observations = [
-      makeObservation({id: 'small_1', observedAt: '2026-04-22T19:00:00.000Z'}),
-      makeObservation({id: 'small_2', observedAt: '2026-04-22T19:01:00.000Z'}),
-      makeObservation({id: 'big_1', observedAt: '2026-04-22T19:42:00.000Z'}),
-      makeObservation({id: 'big_2', observedAt: '2026-04-22T19:43:00.000Z'}),
-      makeObservation({id: 'big_3', observedAt: '2026-04-22T19:44:00.000Z'}),
-      makeObservation({id: 'big_4', observedAt: '2026-04-22T19:47:00.000Z'}),
+      makeObservation({
+        id: 'small_1',
+        observedAt: '2026-04-22T19:00:00.000Z',
+      }),
+      makeObservation({
+        id: 'small_2',
+        observedAt: '2026-04-22T19:01:00.000Z',
+      }),
+      makeObservation({ id: 'big_1', observedAt: '2026-04-22T19:42:00.000Z' }),
+      makeObservation({ id: 'big_2', observedAt: '2026-04-22T19:43:00.000Z' }),
+      makeObservation({ id: 'big_3', observedAt: '2026-04-22T19:44:00.000Z' }),
+      makeObservation({ id: 'big_4', observedAt: '2026-04-22T19:47:00.000Z' }),
     ];
     const ids = observations.map(o => o.id);
     const result = pruneOutlierObservationIds(ids, indexOf(observations));
@@ -802,7 +1055,7 @@ describe('pruneOutlierObservationIds', () => {
 
   test('passes through single-observation blocks unchanged', () => {
     const observations = [
-      makeObservation({id: 'obs_1', observedAt: '2026-04-22T19:00:00.000Z'}),
+      makeObservation({ id: 'obs_1', observedAt: '2026-04-22T19:00:00.000Z' }),
     ];
     const ids = observations.map(o => o.id);
     const result = pruneOutlierObservationIds(ids, indexOf(observations));

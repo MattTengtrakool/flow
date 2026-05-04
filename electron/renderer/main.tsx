@@ -1,7 +1,7 @@
 import React from 'react';
-import {createRoot} from 'react-dom/client';
+import { createRoot } from 'react-dom/client';
 
-import {ElectronApp} from './App';
+import { ElectronApp } from './App';
 import './styles.css';
 
 const root = document.getElementById('root');

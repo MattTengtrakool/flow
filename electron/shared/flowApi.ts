@@ -1,12 +1,80 @@
-import type {RunChatTurnArgs, RunChatTurnResult} from '../../src/chat/runChat';
-import type {DomainEvent} from '../../src/timeline/eventLog';
-import type {TimelineView} from '../../src/timeline/eventLog';
+import type {
+  RunChatTurnArgs,
+  RunChatTurnResult,
+} from '../../src/chat/runChat';
+import type { DomainEvent } from '../../src/timeline/eventLog';
+import type { TimelineView } from '../../src/timeline/eventLog';
+import type {
+  ProactiveSettings,
+  ProactiveState,
+} from '../../src/proactive/types';
+import type {
+  MeetingAssistantSettings,
+  MeetingDetection,
+  MeetingRecording,
+  MeetingRuntimeState,
+  StartMeetingTranscriptionArgs,
+} from '../../src/meetings/types';
+import type {
+  CalendarEventAnnotationPatch,
+  CalendarEventBlockLinkAction,
+  CalendarSourceMode,
+  CalendarStatePayload,
+} from '../../src/calendar/types';
 import type {
   CaptureInspectionPayload,
   CaptureResultPayload,
   ContextSnapshotPayload,
   PermissionsStatus,
 } from '../../src/types/contextCapture';
+
+export type ApiProvider = 'gemini' | 'anthropic';
+export type AiConnectionMode = 'managed' | 'byok';
+export type FlowAppProfile = 'dev' | 'prod';
+
+export type ApiKeyStatus = {
+  configured: boolean;
+  source: 'stored' | 'env' | 'missing';
+  encrypted: boolean;
+  lastValidatedAt: string | null;
+  validationStatus: 'untested' | 'valid' | 'invalid' | 'error';
+  validationMessage: string | null;
+};
+
+export type FlowSettings = {
+  onboardingCompleted: boolean;
+  aiConnectionMode: AiConnectionMode;
+  selectedProvider: ApiProvider;
+  privacyModeEnabled: boolean;
+  managedAi: {
+    configured: boolean;
+    endpoint: string | null;
+    authenticated: boolean;
+  };
+  proactive: ProactiveSettings;
+  meetingAssistant: MeetingAssistantSettings;
+  apiKeys: Record<ApiProvider, ApiKeyStatus>;
+};
+
+export type FlowSettingsPatch = Partial<
+  Pick<
+    FlowSettings,
+    | 'onboardingCompleted'
+    | 'aiConnectionMode'
+    | 'selectedProvider'
+    | 'privacyModeEnabled'
+    | 'proactive'
+    | 'meetingAssistant'
+  >
+>;
+
+export type ApiKeyValidationResult = {
+  provider: ApiProvider;
+  ok: boolean;
+  status: ApiKeyStatus['validationStatus'];
+  message: string;
+  checkedAt: string;
+};
 
 export type MonitoringOptions = {
   preciseModeEnabled: boolean;
@@ -32,11 +100,32 @@ export type TimelineStatePayload = {
   captureEnabled: boolean;
   captureStatusMessage: string;
   plannerInFlight: boolean;
+  lastCapturedAt: string | null;
+  lastObservedAt: string | null;
+  plannerLastRunAt: string | null;
+  plannerLastSnapshotId: string | null;
+  plannerLastFailureMessage: string | null;
+  plannerStatus: 'idle' | 'planning' | 'failed';
+  privacyModeEnabled: boolean;
+  aiConnectionMode: AiConnectionMode;
+  selectedProvider: ApiProvider;
+  managedAi: FlowSettings['managedAi'];
+  apiKeyStatus: Record<ApiProvider, ApiKeyStatus>;
+  recentActivity: Array<{
+    kind: 'capture' | 'observation' | 'planner';
+    occurredAt: string;
+    title: string;
+    detail: string;
+  }>;
+  meetingDetection: MeetingDetection | null;
+  activeMeetingRecording: MeetingRecording | null;
+  meetingTranscriptionStatus: MeetingRuntimeState['transcriptionStatus'];
 };
 
 export type FlowElectronApi = {
   app: {
     getVersion: () => Promise<string>;
+    getProfile: () => Promise<FlowAppProfile>;
   };
   storage: {
     loadEventLog: () => Promise<PersistedEventLogPayload>;
@@ -57,10 +146,67 @@ export type FlowElectronApi = {
     captureNow: () => Promise<CaptureResultPayload>;
     addContextSnapshotListener: (
       listener: (snapshot: ContextSnapshotPayload) => void,
-    ) => {remove: () => void};
+    ) => { remove: () => void };
   };
   chat: {
     runTurn: (args: RunChatTurnArgs) => Promise<RunChatTurnResult>;
+  };
+  calendar: {
+    getState: () => Promise<CalendarStatePayload>;
+    connectGoogleAccount: () => Promise<CalendarStatePayload>;
+    disconnectGoogleAccount: (
+      accountId: string,
+    ) => Promise<CalendarStatePayload>;
+    syncNow: () => Promise<CalendarStatePayload>;
+    updateCalendarSelection: (
+      accountId: string,
+      calendarId: string,
+      enabled: boolean,
+    ) => Promise<CalendarStatePayload>;
+    updateCalendarSourceMode: (
+      accountId: string,
+      calendarId: string,
+      mode: CalendarSourceMode,
+    ) => Promise<CalendarStatePayload>;
+    updateEventAnnotation: (
+      eventId: string,
+      patch: CalendarEventAnnotationPatch,
+    ) => Promise<CalendarStatePayload>;
+    updateEventBlockLink: (
+      eventId: string,
+      blockId: string,
+      action: CalendarEventBlockLinkAction,
+    ) => Promise<CalendarStatePayload>;
+    addStateListener: (listener: (state: CalendarStatePayload) => void) => {
+      remove: () => void;
+    };
+  };
+  settings: {
+    getSettings: () => Promise<FlowSettings>;
+    updateSettings: (patch: FlowSettingsPatch) => Promise<FlowSettings>;
+    setApiKey: (provider: ApiProvider, value: string) => Promise<FlowSettings>;
+    clearApiKey: (provider: ApiProvider) => Promise<FlowSettings>;
+    validateApiKey: (provider: ApiProvider) => Promise<ApiKeyValidationResult>;
+  };
+  proactive: {
+    getState: () => Promise<ProactiveState>;
+    dismiss: (insightId: string) => Promise<ProactiveState>;
+    snooze: (insightId: string, minutes: number) => Promise<ProactiveState>;
+    action: (insightId: string, actionId: string) => Promise<ProactiveState>;
+    addStateListener: (listener: (state: ProactiveState) => void) => {
+      remove: () => void;
+    };
+  };
+  meetings: {
+    getState: () => Promise<MeetingRuntimeState>;
+    startTranscription: (
+      args: StartMeetingTranscriptionArgs,
+    ) => Promise<MeetingRuntimeState>;
+    stopTranscription: (meetingId: string) => Promise<MeetingRuntimeState>;
+    dismissDetection: (detectionId: string) => Promise<MeetingRuntimeState>;
+    addStateListener: (listener: (state: MeetingRuntimeState) => void) => {
+      remove: () => void;
+    };
   };
   timeline: {
     getState: () => Promise<TimelineStatePayload>;
@@ -72,6 +218,16 @@ export type FlowElectronApi = {
       notesKey: string;
       blockId: string | null;
       notes: string;
+    }) => Promise<unknown>;
+    correctBlock: (args: {
+      blockId: string;
+      notesKey?: string;
+      title?: string;
+      category?: string;
+      markedWrong?: boolean;
+      feedback?: string;
+      mergeWithBlockId?: string;
+      splitAt?: string;
     }) => Promise<unknown>;
     addStateListener: (listener: (state: TimelineStatePayload) => void) => {
       remove: () => void;

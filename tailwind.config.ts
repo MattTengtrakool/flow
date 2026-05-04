@@ -1,10 +1,7 @@
-import type {Config} from 'tailwindcss';
+import type { Config } from 'tailwindcss';
 
 export default {
-  content: [
-    './index.html',
-    './electron/renderer/**/*.{ts,tsx}',
-  ],
+  content: ['./index.html', './electron/renderer/**/*.{ts,tsx}'],
   theme: {
     extend: {
       colors: {

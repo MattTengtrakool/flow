@@ -2,13 +2,11 @@ import {
   createOccurredAt,
   type ObservationView,
   type TimelineView,
+  type UserBlockCorrectionView,
 } from '../timeline/eventLog';
-import type {
-  WorklogCalendarBlock,
-  WorklogDayView,
-} from '../worklog/types';
-import {pruneOutlierObservationIds} from './revisionEngine';
-import {mapBlockToWorklogCalendarBlock, type PlanBlock} from './types';
+import type { WorklogCalendarBlock, WorklogDayView } from '../worklog/types';
+import { pruneOutlierObservationIds } from './revisionEngine';
+import { mapBlockToWorklogCalendarBlock, type PlanBlock } from './types';
 
 const READ_TIME_BLOCK_BUFFER_MS = 2 * 60 * 1000;
 
@@ -93,11 +91,18 @@ export function getDayWorklog(
   const targetDayKey = toDateKey(dateIso, timezone);
   // Pre-parse snapshot windows once — shared across all blocks in this call
   const snapshotWindowMs = buildSnapshotWindowMs(timeline);
-  const rawBlocks = selectBlocksForDay(timeline, snapshotWindowMs, targetDayKey, timezone);
+  const rawBlocks = selectBlocksForDay(
+    timeline,
+    snapshotWindowMs,
+    targetDayKey,
+    timezone,
+  );
   const blocks = rawBlocks.map(block =>
     cleanBlockOfOutliers(block, timeline.observationsById),
   );
-  const worklogBlocks = blocks.map(block => mapBlockToWorklogCalendarBlock(block));
+  const worklogBlocks = blocks.map(block =>
+    applyUserCorrections(mapBlockToWorklogCalendarBlock(block), timeline),
+  );
   const focusedMinutes = worklogBlocks.reduce((sum, block) => {
     const durationMs = Math.max(
       0,
@@ -118,7 +123,7 @@ export function getDayWorklog(
   };
 }
 
-type SnapshotWindowMs = {startMs: number; endMs: number};
+type SnapshotWindowMs = { startMs: number; endMs: number };
 
 function buildSnapshotWindowMs(timeline: TimelineView): SnapshotWindowMs[] {
   return timeline.planSnapshots.map(s => ({
@@ -177,7 +182,7 @@ function isBlockSupersededByLaterSnapshot(
   const midpointMs = blockStartMs + (blockEndMs - blockStartMs) / 2;
 
   for (let j = snapshotWindowMs.length - 1; j > currentIndex; j -= 1) {
-    const {startMs, endMs} = snapshotWindowMs[j];
+    const { startMs, endMs } = snapshotWindowMs[j];
     if (midpointMs >= startMs && midpointMs <= endMs) {
       return true;
     }
@@ -221,11 +226,18 @@ export function getWorklogForDates(
   const result: Record<string, WorklogCalendarBlock[]> = {};
   for (const dateIso of dateIsos) {
     const targetDayKey = toDateKey(`${dateIso}T12:00:00.000Z`, timezone);
-    const rawBlocks = selectBlocksForDay(timeline, snapshotWindowMs, targetDayKey, timezone);
+    const rawBlocks = selectBlocksForDay(
+      timeline,
+      snapshotWindowMs,
+      targetDayKey,
+      timezone,
+    );
     const blocks = rawBlocks.map(block =>
       cleanBlockOfOutliers(block, timeline.observationsById),
     );
-    result[targetDayKey] = blocks.map(block => mapBlockToWorklogCalendarBlock(block));
+    result[targetDayKey] = blocks.map(block =>
+      applyUserCorrections(mapBlockToWorklogCalendarBlock(block), timeline),
+    );
   }
   return result;
 }
@@ -244,7 +256,8 @@ export function getAllPlanCalendarBlocks(
       if (seenIds.has(block.id)) continue;
       const sourceHash = hashSources(block.sourceObservationIds);
       if (sourceHash.length > 0 && seenSourceHashes.has(sourceHash)) continue;
-      if (isBlockSupersededByLaterSnapshot(snapshotWindowMs, i, block)) continue;
+      if (isBlockSupersededByLaterSnapshot(snapshotWindowMs, i, block))
+        continue;
 
       seenIds.add(block.id);
       if (sourceHash.length > 0) seenSourceHashes.add(sourceHash);
@@ -255,5 +268,46 @@ export function getAllPlanCalendarBlocks(
   return selected
     .sort((a, b) => a.startAt.localeCompare(b.startAt))
     .map(block => cleanBlockOfOutliers(block, timeline.observationsById))
-    .map(mapBlockToWorklogCalendarBlock);
+    .map(block =>
+      applyUserCorrections(mapBlockToWorklogCalendarBlock(block), timeline),
+    );
+}
+
+function applyUserCorrections(
+  block: WorklogCalendarBlock,
+  timeline: TimelineView,
+): WorklogCalendarBlock {
+  const correction = findCorrection(block, timeline.userBlockCorrections);
+  if (correction == null) return block;
+
+  const title = correction.title ?? block.title;
+  const category = correction.category ?? block.category;
+  return {
+    ...block,
+    title,
+    category,
+    summary: {
+      ...block.summary,
+      headline: title,
+    },
+    userCorrection: {
+      title: correction.title,
+      category: correction.category,
+      markedWrong: correction.markedWrong,
+      feedback: correction.feedback,
+      mergeWithBlockId: correction.mergeWithBlockId,
+      splitAt: correction.splitAt,
+      editedAt: correction.editedAt,
+    },
+  };
+}
+
+function findCorrection(
+  block: WorklogCalendarBlock,
+  corrections: Record<string, UserBlockCorrectionView>,
+): UserBlockCorrectionView | null {
+  if (block.notesKey != null && corrections[block.notesKey] != null) {
+    return corrections[block.notesKey];
+  }
+  return corrections[block.id] ?? null;
 }

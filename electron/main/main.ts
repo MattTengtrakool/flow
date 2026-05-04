@@ -1,17 +1,52 @@
-import {app, BrowserWindow, Menu, Tray, ipcMain, nativeImage} from 'electron';
-import path from 'node:path';
-import {pathToFileURL} from 'node:url';
+import './env';
 
-import {registerAiIpcHandlers} from './ai/aiService';
-import {registerCaptureIpcHandlers} from './capture/captureService';
-import {loadEventLog, saveEventLog} from './storage/eventLogStorage';
+import { app, BrowserWindow, Menu, Tray, ipcMain, nativeImage } from 'electron';
+import path from 'node:path';
+import { pathToFileURL } from 'node:url';
+
+import {
+  getAppDataDirectoryPath,
+  getAppDisplayName,
+  getAppProfile,
+  getCompanionWindowTitle,
+} from './appProfile';
+import { registerAiIpcHandlers } from './ai/aiService';
+import { registerCaptureIpcHandlers } from './capture/captureService';
+import {
+  calendarService,
+  registerCalendarIpcHandlers,
+} from './calendar/googleCalendarService';
+import { loadEventLog, saveEventLog } from './storage/eventLogStorage';
+import {
+  companionInitialBounds,
+  configureCompanionWindow,
+} from './proactive/companionWindow';
+import {
+  proactiveService,
+  registerProactiveIpcHandlers,
+} from './proactive/proactiveService';
+import {
+  meetingTranscriptionService,
+  registerMeetingIpcHandlers,
+} from './meetings/meetingService';
+import {
+  registerSettingsIpcHandlers,
+  settingsService,
+} from './settings/settingsService';
 import {
   registerTimelineIpcHandlers,
   timelineService,
 } from './timeline/timelineService';
 
 const isDev = process.env.ELECTRON_RENDERER_URL != null || !app.isPackaged;
+app.setName(getAppDisplayName());
+app.setPath('userData', getAppDataDirectoryPath());
+
 let tray: Tray | null = null;
+let mainWindow: BrowserWindow | null = null;
+let companionWindow: BrowserWindow | null = null;
+const FLOW_APP_ICON_PATH = 'brand/flow-icon-512.png';
+const FLOW_TRAY_ICON_PATH = 'brand/generated/flow-menubar@1x.png';
 
 function rendererUrl(): string {
   if (process.env.ELECTRON_RENDERER_URL != null) {
@@ -31,8 +66,8 @@ function createMainWindow() {
     height: 860,
     minWidth: 960,
     minHeight: 640,
-    title: 'Flow',
-    icon: assetPath('brand/flow-icon-512.png'),
+    title: getAppDisplayName(),
+    icon: assetPath(FLOW_APP_ICON_PATH),
     backgroundColor: '#f7f5f0',
     webPreferences: {
       preload: path.join(__dirname, '../preload/index.js'),
@@ -41,12 +76,52 @@ function createMainWindow() {
       sandbox: false,
     },
   });
+  mainWindow = window;
+  window.on('closed', () => {
+    if (mainWindow === window) mainWindow = null;
+  });
 
   void window.loadURL(rendererUrl());
 
   if (isDev) {
-    window.webContents.openDevTools({mode: 'detach'});
+    window.webContents.openDevTools({ mode: 'detach' });
   }
+}
+
+function createCompanionWindow() {
+  const bounds = companionInitialBounds();
+  const window = new BrowserWindow({
+    ...bounds,
+    frame: false,
+    transparent: true,
+    resizable: false,
+    minimizable: false,
+    maximizable: false,
+    alwaysOnTop: true,
+    hasShadow: false,
+    skipTaskbar: true,
+    show: false,
+    title: getCompanionWindowTitle(),
+    backgroundColor: '#00000000',
+    webPreferences: {
+      preload: path.join(__dirname, '../preload/index.js'),
+      contextIsolation: true,
+      nodeIntegration: false,
+      sandbox: false,
+    },
+  });
+  companionWindow = window;
+  configureCompanionWindow(window);
+  window.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: false });
+  void window.loadURL(`${rendererUrl()}#/companion`);
+  window.once('ready-to-show', () => {
+    if (settingsService.publicSettings().proactive.companionEnabled) {
+      window.showInactive();
+    }
+  });
+  window.on('closed', () => {
+    if (companionWindow === window) companionWindow = null;
+  });
 }
 
 function assetPath(relativePath: string): string {
@@ -54,33 +129,36 @@ function assetPath(relativePath: string): string {
 }
 
 function createTray() {
-  const image = nativeImage.createFromPath(
-    assetPath('brand/generated/flow-menubar@1x.png'),
-  );
+  const image = nativeImage.createFromPath(assetPath(FLOW_TRAY_ICON_PATH));
   image.setTemplateImage(true);
   tray = new Tray(image);
-  tray.setToolTip('Flow');
+  tray.setToolTip(getAppDisplayName());
   tray.setContextMenu(
     Menu.buildFromTemplate([
       {
-        label: 'Show Flow',
+        label: `Show ${getAppDisplayName()}`,
         click() {
-          const existing = BrowserWindow.getAllWindows()[0];
-          if (existing != null) {
-            existing.show();
-            existing.focus();
+          if (mainWindow != null) {
+            mainWindow.show();
+            mainWindow.focus();
           } else {
             createMainWindow();
           }
         },
       },
-      {type: 'separator'},
-      {role: 'quit'},
+      { type: 'separator' },
+      { role: 'quit' },
     ]),
   );
 }
 
+function setDockIcon() {
+  if (process.platform !== 'darwin') return;
+  app.dock?.setIcon(nativeImage.createFromPath(assetPath(FLOW_APP_ICON_PATH)));
+}
+
 ipcMain.handle('flow:app:getVersion', () => app.getVersion());
+ipcMain.handle('flow:app:getProfile', () => getAppProfile());
 ipcMain.handle('flow:storage:loadEventLog', () => loadEventLog());
 ipcMain.handle('flow:storage:saveEventLog', (_event, eventLog: unknown) => {
   if (!Array.isArray(eventLog)) {
@@ -90,15 +168,29 @@ ipcMain.handle('flow:storage:saveEventLog', (_event, eventLog: unknown) => {
 });
 registerCaptureIpcHandlers();
 registerAiIpcHandlers();
+registerCalendarIpcHandlers();
+registerProactiveIpcHandlers();
+registerMeetingIpcHandlers();
+registerSettingsIpcHandlers();
 registerTimelineIpcHandlers();
 
 app.whenReady().then(() => {
-  timelineService.hydrate().catch(() => {});
+  setDockIcon();
+  settingsService
+    .hydrate()
+    .then(() => calendarService.hydrate())
+    .then(() => timelineService.hydrate())
+    .then(() => proactiveService.hydrate())
+    .then(() => meetingTranscriptionService.hydrate())
+    .catch(() => {
+      timelineService.hydrate().catch(() => {});
+    });
   createMainWindow();
+  createCompanionWindow();
   createTray();
 
   app.on('activate', () => {
-    if (BrowserWindow.getAllWindows().length === 0) {
+    if (mainWindow == null) {
       createMainWindow();
     }
   });

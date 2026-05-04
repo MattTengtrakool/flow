@@ -1,12 +1,12 @@
-import {getConfiguredApiKey} from '../config/apiKeys';
+import { getConfiguredApiKey } from '../config/apiKeys';
 import {
   redactSensitiveText,
   sanitizeCaptureMetadata,
   sanitizeContextSnapshot,
   sanitizeInspection,
 } from '../privacy/redaction';
-import {createOccurredAt} from '../timeline/eventLog';
-import type {ObservationEngineInput, ObservationRun} from './types';
+import { createOccurredAt } from '../timeline/eventLog';
+import type { ObservationEngineInput, ObservationRun } from './types';
 import {
   OBSERVATION_PROMPT_VERSION,
   STRUCTURED_OBSERVATION_JSON_SCHEMA,
@@ -18,7 +18,7 @@ const DEFAULT_OBSERVATION_MODEL = 'gemini-2.5-flash-lite';
 type GeminiResponse = {
   candidates?: Array<{
     content?: {
-      parts?: Array<{text?: string}>;
+      parts?: Array<{ text?: string }>;
     };
     finishReason?: string;
   }>;
@@ -194,7 +194,9 @@ export async function generateObservation(
   }
 
   const startedAt = Date.now();
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`;
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(
+    model,
+  )}:generateContent`;
   const response = await fetch(url, {
     method: 'POST',
     headers: {
@@ -243,8 +245,10 @@ export async function generateObservation(
       finishReason === 'MAX_TOKENS'
         ? 'The model hit the token limit before producing complete output. Try a higher max_output_tokens.'
         : finishReason === 'SAFETY'
-          ? 'The model refused to generate output due to safety filters.'
-          : `The observation response did not include any JSON text (finishReason: ${finishReason ?? 'unknown'}).`,
+        ? 'The model refused to generate output due to safety filters.'
+        : `The observation response did not include any JSON text (finishReason: ${
+            finishReason ?? 'unknown'
+          }).`,
     );
   }
 
@@ -257,4 +261,4 @@ export async function generateObservation(
   };
 }
 
-export {DEFAULT_OBSERVATION_MODEL};
+export { DEFAULT_OBSERVATION_MODEL };

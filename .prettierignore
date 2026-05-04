@@ -1,0 +1,13 @@
+node_modules/
+coverage/
+dist-electron/
+dist-renderer/
+release/
+electron/native-capture/build/
+vendor/
+.bundle/
+
+.env
+.env.*
+CLAUDE.md
+pnpm-lock.yaml
