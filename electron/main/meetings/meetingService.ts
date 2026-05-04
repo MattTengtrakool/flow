@@ -36,9 +36,12 @@ import { nativeAudioClient } from './nativeAudioClient';
 
 const DETECTION_EVALUATE_INTERVAL_MS = 15_000;
 const AUDIO_CHUNK_SECONDS = 15;
+const FINALIZATION_WAIT_TIMEOUT_MS = 2 * 60_000;
+const SUMMARY_REQUEST_TIMEOUT_MS = 90_000;
 
 class MeetingTranscriptionService {
   private timer: NodeJS.Timeout | null = null;
+  private finalizationTimers = new Map<string, NodeJS.Timeout>();
   private permissionState: MeetingPermissionState = {
     helperAvailable: nativeAudioClient.helperAvailable(),
     screenCaptureGranted: null,
@@ -66,11 +69,13 @@ class MeetingTranscriptionService {
     });
     this.refreshPermissionState().catch(() => {});
     this.evaluate().catch(() => {});
+    this.recoverFinalizingRecordings().catch(() => {});
   }
 
   async getState(): Promise<MeetingRuntimeState> {
     await this.refreshPermissionState();
     await this.evaluate();
+    await this.recoverFinalizingRecordings();
     return this.publicState();
   }
 
@@ -224,7 +229,8 @@ class MeetingTranscriptionService {
       },
     ]);
     if (reason === 'user' || reason === 'completed') {
-      await this.finalizeMeeting(meetingId);
+      this.scheduleFinalizationTimeout(meetingId, stoppedAt);
+      await this.finalizeMeetingIfStopped(meetingId);
     }
     this.broadcast();
     return this.publicState();
@@ -370,6 +376,7 @@ class MeetingTranscriptionService {
       ]);
       await this.cleanupAudioChunk(chunk.filePath);
       this.lastError = null;
+      await this.finalizeMeetingIfStopped(chunk.meetingId);
     } catch (error) {
       const message =
         error instanceof Error ? error.message : 'Audio transcription failed.';
@@ -383,14 +390,19 @@ class MeetingTranscriptionService {
           occurredAt: createOccurredAt(),
         },
       ]);
+      this.clearFinalizationTimeout(chunk.meetingId);
     }
     this.broadcast();
   }
 
-  private async finalizeMeeting(meetingId: string) {
+  private async finalizeMeeting(meetingId: string): Promise<boolean> {
     const timeline = timelineService.getTimelineForServices();
+    if (timeline.meetingSummariesByMeetingId[meetingId] != null) {
+      this.clearFinalizationTimeout(meetingId);
+      return true;
+    }
     const chunks = timeline.meetingTranscriptChunksByMeetingId[meetingId] ?? [];
-    if (chunks.length === 0) return;
+    if (chunks.length === 0) return false;
     const recording = timeline.meetingRecordingsById[meetingId];
     const calendar =
       recording?.calendarEventId != null
@@ -398,32 +410,126 @@ class MeetingTranscriptionService {
             event => event.id === recording.calendarEventId,
           ) ?? null
         : null;
-    const result = await summarizeManagedMeeting({
-      meetingId,
-      transcriptChunks: chunks,
-      calendarEvent:
-        calendar != null
-          ? {
-              id: calendar.id,
-              title: calendar.title,
-              startTime: calendar.startTime,
-              endTime: calendar.endTime,
-            }
-          : null,
-    });
+    try {
+      const result = await withTimeout(
+        summarizeManagedMeeting({
+          meetingId,
+          transcriptChunks: chunks,
+          calendarEvent:
+            calendar != null
+              ? {
+                  id: calendar.id,
+                  title: calendar.title,
+                  startTime: calendar.startTime,
+                  endTime: calendar.endTime,
+                }
+              : null,
+        }),
+        SUMMARY_REQUEST_TIMEOUT_MS,
+        'Meeting summary generation timed out.',
+      );
+      timelineService.appendMeetingEvents([
+        {
+          id: createDomainId('event'),
+          type: 'meeting_summary_generated',
+          summary: {
+            id: createDomainId('meeting_summary'),
+            meetingId,
+            generatedAt: createOccurredAt(),
+            ...result,
+          },
+          occurredAt: createOccurredAt(),
+        },
+      ]);
+      this.clearFinalizationTimeout(meetingId);
+      return true;
+    } catch (error) {
+      this.failFinalization(
+        meetingId,
+        error instanceof Error
+          ? error.message
+          : 'Meeting summary generation failed.',
+      );
+      return true;
+    }
+  }
+
+  private async finalizeMeetingIfStopped(meetingId: string) {
+    const timeline = timelineService.getTimelineForServices();
+    const recording = timeline.meetingRecordingsById[meetingId] ?? null;
+    if (recording == null || recording.status !== 'finalizing') return;
+    if (timeline.meetingSummariesByMeetingId[meetingId] != null) {
+      this.clearFinalizationTimeout(meetingId);
+      return;
+    }
+    await this.finalizeMeeting(meetingId);
+  }
+
+  private async recoverFinalizingRecordings() {
+    const timeline = timelineService.getTimelineForServices();
+    for (const meetingId of timeline.meetingRecordingOrder) {
+      const recording = timeline.meetingRecordingsById[meetingId] ?? null;
+      if (recording?.status !== 'finalizing') continue;
+      if (!this.finalizationTimers.has(meetingId)) {
+        this.scheduleFinalizationTimeout(meetingId, recording.stoppedAt);
+      }
+      await this.finalizeMeetingIfStopped(meetingId);
+    }
+  }
+
+  private scheduleFinalizationTimeout(
+    meetingId: string,
+    stoppedAt?: string | null,
+  ) {
+    this.clearFinalizationTimeout(meetingId);
+    const stoppedMs = stoppedAt != null ? Date.parse(stoppedAt) : NaN;
+    const elapsedMs = Number.isNaN(stoppedMs)
+      ? 0
+      : Math.max(0, Date.now() - stoppedMs);
+    const delayMs = Math.max(0, FINALIZATION_WAIT_TIMEOUT_MS - elapsedMs);
+    const timer = setTimeout(() => {
+      this.handleFinalizationTimeout(meetingId).catch(() => {});
+    }, delayMs);
+    timer.unref?.();
+    this.finalizationTimers.set(meetingId, timer);
+  }
+
+  private clearFinalizationTimeout(meetingId: string) {
+    const timer = this.finalizationTimers.get(meetingId);
+    if (timer != null) clearTimeout(timer);
+    this.finalizationTimers.delete(meetingId);
+  }
+
+  private async handleFinalizationTimeout(meetingId: string) {
+    const timeline = timelineService.getTimelineForServices();
+    const recording = timeline.meetingRecordingsById[meetingId] ?? null;
+    if (recording == null || recording.status !== 'finalizing') {
+      this.clearFinalizationTimeout(meetingId);
+      return;
+    }
+
+    const finalized = await this.finalizeMeeting(meetingId);
+    if (!finalized) {
+      this.failFinalization(
+        meetingId,
+        'Meeting notes did not finish because no transcript chunks were captured after stopping.',
+      );
+    }
+    this.broadcast();
+  }
+
+  private failFinalization(meetingId: string, message: string) {
+    this.lastError = message;
     timelineService.appendMeetingEvents([
       {
         id: createDomainId('event'),
-        type: 'meeting_summary_generated',
-        summary: {
-          id: createDomainId('meeting_summary'),
-          meetingId,
-          generatedAt: createOccurredAt(),
-          ...result,
-        },
+        type: 'meeting_transcription_failed',
+        meetingId,
+        message,
         occurredAt: createOccurredAt(),
       },
     ]);
+    this.clearFinalizationTimeout(meetingId);
   }
 
   private async cleanupAudioChunk(filePath: string) {
@@ -558,6 +664,30 @@ function isAudioChunkReadyEvent(event: {
   type: string;
 }): event is { type: 'audio_chunk_ready' } & MeetingAudioChunkMetadata {
   return event.type === 'audio_chunk_ready' && 'chunkId' in event;
+}
+
+function withTimeout<T>(
+  promise: Promise<T>,
+  timeoutMs: number,
+  message: string,
+): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(() => {
+      reject(new Error(message));
+    }, timeoutMs);
+    timer.unref?.();
+
+    promise.then(
+      value => {
+        clearTimeout(timer);
+        resolve(value);
+      },
+      error => {
+        clearTimeout(timer);
+        reject(error);
+      },
+    );
+  });
 }
 
 async function meetingAudioDirectoryPath(): Promise<string> {
