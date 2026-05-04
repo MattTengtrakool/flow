@@ -73,7 +73,8 @@ export type PlannerRevisionCause =
   | 'cadence'
   | 'session_start'
   | 'session_stop'
-  | 'manual';
+  | 'manual'
+  | 'diagnostic_repair';
 
 export type PlannerFailureReason =
   | 'missing_api_key'

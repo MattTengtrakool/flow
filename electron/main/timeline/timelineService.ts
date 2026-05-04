@@ -1,4 +1,6 @@
-import {BrowserWindow, ipcMain} from 'electron';
+import {BrowserWindow, app, ipcMain} from 'electron';
+import {existsSync, mkdirSync, unlinkSync} from 'node:fs';
+import path from 'node:path';
 
 import type {
   CalendarItemUpdate,
@@ -6,9 +8,20 @@ import type {
   CreateCalendarItemInput,
   UserCalendarItem,
 } from '../../../src/calendar/types';
+import type {
+  AudioPermissionStatus,
+  AudioRecordingRuntimeState,
+  AudioRecordingSource,
+  AudioRecordingView,
+  AudioTranscriptView,
+} from '../../../src/audio/types';
+import {buildOrphanedAudioRecordingRepairEvent} from '../../../src/audio/orphanRepair';
+import {detectMeetingCandidate} from '../../../src/meeting/detector';
+import type {MeetingCandidateView} from '../../../src/meeting/types';
 import {generateStructuredObservationForCapture} from '../../../src/observation/runObservationForCapture';
 import {PLANNER_CONFIG} from '../../../src/planner/config';
 import {runPlannerRevision} from '../../../src/planner/revisionEngine';
+import type {PlannerRevisionCause, TaskPlanRevisionFailure} from '../../../src/planner/types';
 import {
   sanitizeCalendarItem,
   sanitizeCalendarItemUpdate,
@@ -31,6 +44,13 @@ import {
   type DomainEvent,
   type TimelineView,
 } from '../../../src/timeline/eventLog';
+import {
+  buildTimelineDiagnostics,
+  type TimelineDiagnosticsReport,
+} from '../../../src/timeline/diagnostics';
+import {buildReconciliationEvents} from '../../../src/tasks/reconcile';
+import {runTaskEngineForObservation} from '../../../src/tasks/runTaskEngineForObservation';
+import {nativeAudioClient} from '../audio/nativeAudioClient';
 import {captureClient} from '../capture/captureService';
 import {loadEventLog, saveEventLog} from '../storage/eventLogStorage';
 
@@ -53,6 +73,17 @@ type TimelineStatePayload = {
   captureEnabled: boolean;
   captureStatusMessage: string;
   plannerInFlight: boolean;
+  plannerRuntimeState: {
+    lastRunAt: string | null;
+    lastRunCause: PlannerRevisionCause | null;
+    lastSnapshotId: string | null;
+    lastFailure: TaskPlanRevisionFailure | null;
+    lastSkippedReason: string | null;
+    consecutiveFailureCount: number;
+  };
+  audioRuntimeState: AudioRecordingRuntimeState;
+  activeMeetingCandidate: MeetingCandidateView | null;
+  diagnostics: TimelineDiagnosticsReport;
 };
 
 function trimCalendarText(value: unknown): string {
@@ -148,8 +179,22 @@ class ElectronTimelineService {
   private plannerInFlight = false;
   private persistTimer: NodeJS.Timeout | null = null;
   private captureTimer: NodeJS.Timeout | null = null;
+  private plannerCadenceTimer: NodeJS.Timeout | null = null;
+  private sessionStartPlanTimer: NodeJS.Timeout | null = null;
   private observationBusy = false;
   private lastObservedFrameHash: string | null = null;
+  private plannerQueue: Promise<void> = Promise.resolve();
+  private stoppingSessionIds = new Set<string>();
+  private sessionStartTriggeredId: string | null = null;
+  private plannerLastRunAt: string | null = null;
+  private plannerLastRunCause: PlannerRevisionCause | null = null;
+  private plannerLastSnapshotId: string | null = null;
+  private plannerLastFailure: TaskPlanRevisionFailure | null = null;
+  private plannerLastSkippedReason: string | null = null;
+  private plannerConsecutiveFailureCount = 0;
+  private audioInFlight = false;
+  private audioLastError: string | null = null;
+  private currentNativeAudioRecordingId: string | null = null;
 
   constructor() {
     captureClient.on('contextSnapshotDidChange', snapshot => {
@@ -163,6 +208,49 @@ class ElectronTimelineService {
           occurredAt: sanitizedSnapshot.recordedAt,
         },
       ]);
+      this.maybePromptForMeeting();
+    });
+    nativeAudioClient.on('stopped', payload => {
+      const recordingId = this.currentNativeAudioRecordingId;
+      if (recordingId == null) return;
+      this.currentNativeAudioRecordingId = null;
+      this.audioInFlight = false;
+      this.appendEvents([
+        {
+          id: createDomainId('event'),
+          type: 'audio_recording_stopped',
+          recordingId,
+          stoppedAt: payload.stoppedAt,
+          durationMs: payload.durationMs,
+          filePath: payload.outputPath,
+          byteLength: payload.byteLength,
+          occurredAt: payload.stoppedAt,
+        },
+      ]);
+      this.transcribeRecording(recordingId, payload.outputPath).catch(error => {
+        this.audioLastError =
+          error instanceof Error ? error.message : 'Audio transcription failed.';
+        this.broadcast();
+      });
+      this.broadcast();
+    });
+    nativeAudioClient.on('failed', error => {
+      const recordingId = this.currentNativeAudioRecordingId;
+      const failedAt = createOccurredAt();
+      this.currentNativeAudioRecordingId = null;
+      this.audioInFlight = false;
+      this.audioLastError = error.message;
+      this.appendEvents([
+        {
+          id: createDomainId('event'),
+          type: 'audio_recording_failed',
+          recordingId,
+          failedAt,
+          errorMessage: error.message,
+          occurredAt: failedAt,
+        },
+      ]);
+      this.broadcast();
     });
   }
 
@@ -171,9 +259,22 @@ class ElectronTimelineService {
       const payload = await loadEventLog();
       this.eventLog = payload.eventLog;
       this.timeline = replayEventLog(payload.eventLog);
+      const orphanRepairEvent = buildOrphanedAudioRecordingRepairEvent({
+        timeline: this.timeline,
+        occurredAt: createOccurredAt(),
+      });
+      if (orphanRepairEvent != null) {
+        applyEventInPlace(this.timeline, orphanRepairEvent);
+        this.eventLog.push(orphanRepairEvent);
+        this.audioLastError = orphanRepairEvent.errorMessage;
+      }
+      this.trimTimeline();
       this.storagePath = payload.filePath;
       this.hydrationStatus = 'ready';
       this.errorMessage = null;
+      if (orphanRepairEvent != null) {
+        this.schedulePersist();
+      }
       await this.startContextMonitoring();
     } catch (error) {
       this.hydrationStatus = 'error';
@@ -198,18 +299,17 @@ class ElectronTimelineService {
         occurredAt: sanitizedSnapshot.recordedAt,
       },
     ]);
+    this.maybePromptForMeeting();
   }
 
   snapshot(): TimelineStatePayload {
-    // Strip four large dicts the renderer never reads. It uses the order arrays
-    // for counts (Settings screen) and planSnapshots for calendar display.
-    // Stripping them keeps the IPC payload small regardless of session length.
+    // Keep observations/captures/context in the renderer payload because task
+    // selectors use them to extend stable-screen work. The timeline is trimmed
+    // in memory, and inspections stay stripped because they are large and not
+    // needed for calendar rendering.
     const leanTimeline: TimelineView = {
       ...this.timeline,
-      captureRecordsById: {},
       captureInspectionsById: {},
-      contextSnapshotsById: {},
-      observationsById: {},
     };
     return {
       eventLogLength: this.eventLog.length,
@@ -220,6 +320,31 @@ class ElectronTimelineService {
       captureEnabled: this.captureEnabled,
       captureStatusMessage: this.captureStatusMessage,
       plannerInFlight: this.plannerInFlight,
+      plannerRuntimeState: {
+        lastRunAt: this.plannerLastRunAt,
+        lastRunCause: this.plannerLastRunCause,
+        lastSnapshotId: this.plannerLastSnapshotId,
+        lastFailure: this.plannerLastFailure,
+        lastSkippedReason: this.plannerLastSkippedReason,
+        consecutiveFailureCount: this.plannerConsecutiveFailureCount,
+      },
+      audioRuntimeState: {
+        permissionStatus: this.timeline.latestAudioPermissionStatus,
+        activeRecordingId: this.timeline.activeAudioRecordingId,
+        inFlight: this.audioInFlight,
+        lastError: this.audioLastError,
+      },
+      activeMeetingCandidate:
+        this.timeline.activeMeetingCandidateId == null
+          ? null
+          : this.timeline.meetingCandidatesById[
+              this.timeline.activeMeetingCandidateId
+            ] ?? null,
+      diagnostics: buildTimelineDiagnostics({
+        timeline: this.timeline,
+        eventLog: this.eventLog,
+        captureEnabled: this.captureEnabled,
+      }),
     };
   }
 
@@ -241,6 +366,51 @@ class ElectronTimelineService {
     this.broadcast();
   }
 
+  private maybePromptForMeeting() {
+    const active =
+      this.timeline.activeMeetingCandidateId == null
+        ? null
+        : this.timeline.meetingCandidatesById[
+            this.timeline.activeMeetingCandidateId
+          ];
+    if (
+      active != null &&
+      (active.status === 'prompted' || active.status === 'recording')
+    ) {
+      return;
+    }
+    if (this.timeline.activeAudioRecordingId != null) return;
+
+    const result = detectMeetingCandidate({
+      timeline: this.timeline,
+      createMeetingId: () => createDomainId('meeting'),
+    });
+    if (result == null) return;
+
+    const existing =
+      this.timeline.meetingCandidatesById[result.candidate.meetingId];
+    const events: DomainEvent[] = [];
+    if (existing == null) {
+      events.push({
+        id: createDomainId('event'),
+        type: 'meeting_candidate_detected',
+        candidate: result.candidate,
+        occurredAt: result.candidate.detectedAt,
+      });
+    }
+    if (result.shouldPrompt) {
+      const shownAt = createOccurredAt();
+      events.push({
+        id: createDomainId('event'),
+        type: 'meeting_prompt_shown',
+        meetingId: result.candidate.meetingId,
+        shownAt,
+        occurredAt: shownAt,
+      });
+    }
+    this.appendEvents(events);
+  }
+
   // Cap the in-memory timeline to prevent unbounded RAM growth during long sessions.
   // The on-disk event log is the source of truth and is not affected — on restart
   // replayEventLog rebuilds the full view from disk. The renderer only needs recent
@@ -249,7 +419,9 @@ class ElectronTimelineService {
     const MAX_CAPTURES = 5_000;
     const MAX_INSPECTIONS = 5_000;
     const MAX_CONTEXT_SNAPSHOTS = 5_000;
-    const MAX_OBSERVATIONS = 2_000;
+    const MAX_OBSERVATIONS = 20_000;
+    const MAX_MEETING_CANDIDATES = 500;
+    const MAX_AUDIO_TRANSCRIPTS = 500;
 
     const t = this.timeline;
 
@@ -268,6 +440,20 @@ class ElectronTimelineService {
     if (t.observationOrder.length > MAX_OBSERVATIONS) {
       const excess = t.observationOrder.splice(0, t.observationOrder.length - MAX_OBSERVATIONS);
       for (const id of excess) delete t.observationsById[id];
+    }
+    if (t.meetingCandidateOrder.length > MAX_MEETING_CANDIDATES) {
+      const excess = t.meetingCandidateOrder.splice(
+        0,
+        t.meetingCandidateOrder.length - MAX_MEETING_CANDIDATES,
+      );
+      for (const id of excess) delete t.meetingCandidatesById[id];
+    }
+    if (t.audioTranscriptOrder.length > MAX_AUDIO_TRANSCRIPTS) {
+      const excess = t.audioTranscriptOrder.splice(
+        0,
+        t.audioTranscriptOrder.length - MAX_AUDIO_TRANSCRIPTS,
+      );
+      for (const id of excess) delete t.audioTranscriptsById[id];
     }
   }
 
@@ -292,7 +478,15 @@ class ElectronTimelineService {
   }
 
   startSession() {
-    if (this.timeline.currentSessionId != null) return this.snapshot();
+    if (this.timeline.currentSessionId != null) {
+      this.captureEnabled = true;
+      this.captureStatusMessage = 'Continuous capture resumed.';
+      this.lastObservedFrameHash = null;
+      this.ensureCaptureTimer();
+      this.ensurePlannerCadence();
+      this.broadcast();
+      return this.snapshot();
+    }
     this.appendEvents([
       {
         id: createDomainId('event'),
@@ -304,7 +498,10 @@ class ElectronTimelineService {
     ]);
     this.captureEnabled = true;
     this.captureStatusMessage = 'Continuous capture is running.';
+    this.lastObservedFrameHash = null;
+    this.sessionStartTriggeredId = null;
     this.ensureCaptureTimer();
+    this.ensurePlannerCadence();
     this.broadcast();
     return this.snapshot();
   }
@@ -312,7 +509,13 @@ class ElectronTimelineService {
   async stopSession() {
     const sessionId = this.timeline.currentSessionId;
     if (sessionId == null) return this.snapshot();
-    await this.runPlannerRevision(true);
+    if (this.stoppingSessionIds.has(sessionId)) return this.snapshot();
+    this.stoppingSessionIds.add(sessionId);
+    this.captureEnabled = false;
+    this.captureStatusMessage = 'Continuous capture is off.';
+    this.clearCaptureTimer();
+    this.clearPlannerCadence();
+    this.clearSessionStartPlan();
     this.appendEvents([
       {
         id: createDomainId('event'),
@@ -321,10 +524,17 @@ class ElectronTimelineService {
         occurredAt: createOccurredAt(),
       },
     ]);
-    this.captureEnabled = false;
-    this.captureStatusMessage = 'Continuous capture is off.';
-    this.clearCaptureTimer();
+    this.appendEvents(buildReconciliationEvents(this.timeline));
     this.broadcast();
+    try {
+      await this.runPlannerRevision({
+        force: true,
+        cause: 'session_stop',
+        sessionIdOverride: sessionId,
+      });
+    } finally {
+      this.stoppingSessionIds.delete(sessionId);
+    }
     return this.snapshot();
   }
 
@@ -340,6 +550,62 @@ class ElectronTimelineService {
       clearInterval(this.captureTimer);
       this.captureTimer = null;
     }
+  }
+
+  private ensurePlannerCadence(delayMs = PLANNER_CONFIG.plannerRevisionIntervalMs) {
+    if (this.plannerCadenceTimer != null || this.timeline.currentSessionId == null) {
+      return;
+    }
+    this.plannerCadenceTimer = setTimeout(() => {
+      this.plannerCadenceTimer = null;
+      const sessionId = this.timeline.currentSessionId;
+      if (sessionId == null || !this.captureEnabled) return;
+      this.runPlannerRevision({
+        cause: 'cadence',
+        sessionIdOverride: sessionId,
+      })
+        .catch(() => {})
+        .finally(() => {
+          const nextDelay =
+            this.plannerLastFailure != null
+              ? PLANNER_CONFIG.plannerRevisionFailureRetryMs
+              : PLANNER_CONFIG.plannerRevisionIntervalMs;
+          this.ensurePlannerCadence(nextDelay);
+        });
+    }, delayMs);
+  }
+
+  private clearPlannerCadence() {
+    if (this.plannerCadenceTimer != null) {
+      clearTimeout(this.plannerCadenceTimer);
+      this.plannerCadenceTimer = null;
+    }
+  }
+
+  private maybeKickoffSessionStartPlan(sessionId: string | null) {
+    if (
+      sessionId == null ||
+      this.sessionStartTriggeredId === sessionId ||
+      this.sessionStartPlanTimer != null
+    ) {
+      return;
+    }
+    this.sessionStartTriggeredId = sessionId;
+    this.sessionStartPlanTimer = setTimeout(() => {
+      this.sessionStartPlanTimer = null;
+      this.runPlannerRevision({
+        cause: 'session_start',
+        sessionIdOverride: sessionId,
+      }).catch(() => {});
+    }, PLANNER_CONFIG.plannerRevisionSessionStartDelayMs);
+  }
+
+  private clearSessionStartPlan() {
+    if (this.sessionStartPlanTimer != null) {
+      clearTimeout(this.sessionStartPlanTimer);
+      this.sessionStartPlanTimer = null;
+    }
+    this.sessionStartTriggeredId = null;
   }
 
   async captureNow() {
@@ -365,6 +631,7 @@ class ElectronTimelineService {
         occurredAt: captureMetadata.capturedAt,
       },
     ]);
+    this.maybePromptForMeeting();
 
     if (
       !this.captureEnabled ||
@@ -376,6 +643,7 @@ class ElectronTimelineService {
       return result;
     }
 
+    const observationSessionId = this.timeline.currentSessionId;
     this.observationBusy = true;
     this.captureStatusMessage = 'Generating a structured observation.';
     this.broadcast();
@@ -398,12 +666,13 @@ class ElectronTimelineService {
           .map(observation => observation.structured!),
         apiKey: process.env.GEMINI_API_KEY,
       });
+      const observationId = createDomainId('observation');
       this.appendEvents([
         {
           id: createDomainId('event'),
           type: 'observation_added',
-          observationId: createDomainId('observation'),
-          sessionId: this.timeline.currentSessionId ?? undefined,
+          observationId,
+          sessionId: observationSessionId ?? undefined,
           text: sanitizeObservationSummary(run.observation.summary),
           structured: sanitizeStructuredObservation(run.observation),
           engineRun: sanitizeObservationRun(run),
@@ -411,6 +680,19 @@ class ElectronTimelineService {
           occurredAt: captureMetadata.capturedAt,
         },
       ]);
+      const observation = this.timeline.observationsById[observationId];
+      if (observation != null) {
+        const taskResult = await runTaskEngineForObservation({
+          timeline: this.timeline,
+          observation,
+          getLatestTimeline: () => this.timeline,
+        });
+        if (taskResult != null) {
+          this.appendEvents(taskResult.events);
+        }
+      }
+      this.maybeKickoffSessionStartPlan(observationSessionId);
+      this.maybePromptForMeeting();
       this.lastObservedFrameHash = captureMetadata.frameHash;
       this.captureStatusMessage = 'Captured the latest changed frame.';
     } catch (error) {
@@ -423,15 +705,43 @@ class ElectronTimelineService {
     return result;
   }
 
-  async runPlannerRevision(force = false) {
-    if (this.plannerInFlight) return this.snapshot();
+  async runPlannerRevision(
+    request:
+      | boolean
+      | {
+          force?: boolean;
+          cause?: PlannerRevisionCause;
+          sessionIdOverride?: string | null;
+        } = false,
+  ) {
+    const normalized =
+      typeof request === 'boolean'
+        ? {force: request, cause: 'manual' as PlannerRevisionCause}
+        : {
+            force: request.force === true,
+            cause: request.cause ?? ('manual' as PlannerRevisionCause),
+            sessionIdOverride: request.sessionIdOverride,
+          };
+    this.plannerQueue = this.plannerQueue
+      .catch(() => {})
+      .then(() => this.runPlannerRevisionTask(normalized));
+    await this.plannerQueue;
+    return this.snapshot();
+  }
+
+  private async runPlannerRevisionTask(request: {
+    force: boolean;
+    cause: PlannerRevisionCause;
+    sessionIdOverride?: string | null;
+  }) {
     this.plannerInFlight = true;
     this.broadcast();
     try {
       const result = await runPlannerRevision({
         timeline: this.timeline,
-        cause: 'manual',
-        force,
+        cause: request.cause,
+        force: request.force,
+        sessionIdOverride: request.sessionIdOverride,
         windowMs: PLANNER_CONFIG.plannerRevisionWindowMs,
         maxObservationsInPrompt:
           PLANNER_CONFIG.plannerRevisionMaxObservationsInPrompt,
@@ -440,15 +750,48 @@ class ElectronTimelineService {
       if (result.kind !== 'skipped') {
         this.appendEvents(result.events);
       }
-      this.errorMessage = result.kind === 'failure' ? result.failure.message : null;
+      this.plannerLastRunCause = request.cause;
+      this.plannerLastRunAt =
+        result.kind === 'success'
+          ? result.snapshot.revisedAt
+          : result.kind === 'failure'
+            ? result.failure.failedAt
+            : createOccurredAt();
+      if (result.kind === 'success') {
+        this.plannerLastSnapshotId = result.snapshot.snapshotId;
+        this.plannerLastFailure = null;
+        this.plannerLastSkippedReason = null;
+        this.plannerConsecutiveFailureCount = 0;
+      } else if (result.kind === 'failure') {
+        this.plannerLastFailure = result.failure;
+        this.plannerLastSkippedReason = null;
+        this.plannerConsecutiveFailureCount += 1;
+      } else {
+        this.plannerLastFailure = null;
+        this.plannerLastSkippedReason = result.reason;
+      }
+      this.errorMessage =
+        result.kind === 'failure' ? result.failure.message : null;
     } catch (error) {
       this.errorMessage =
         error instanceof Error ? error.message : 'Planner revision failed.';
+      this.plannerLastFailure = {
+        failedAt: createOccurredAt(),
+        cause: request.cause,
+        reason: 'engine_error',
+        message: this.errorMessage,
+        windowStartAt: new Date(
+          Date.now() - PLANNER_CONFIG.plannerRevisionWindowMs,
+        ).toISOString(),
+        windowEndAt: createOccurredAt(),
+        inputObservationCount: 0,
+        inputClusterCount: 0,
+      };
+      this.plannerConsecutiveFailureCount += 1;
     } finally {
       this.plannerInFlight = false;
       this.broadcast();
     }
-    return this.snapshot();
   }
 
   editBlockNotes(args: {notesKey: string; blockId: string | null; notes: string}) {
@@ -520,6 +863,241 @@ class ElectronTimelineService {
     ]);
     return this.snapshot();
   }
+
+  async getAudioPermissionStatus(): Promise<AudioPermissionStatus> {
+    const status = await nativeAudioClient.getPermissionsStatus();
+    this.appendEvents([
+      {
+        id: createDomainId('event'),
+        type: 'audio_permission_changed',
+        status,
+        occurredAt: status.checkedAt,
+      },
+    ]);
+    return status;
+  }
+
+  async requestAudioPermissions(): Promise<AudioPermissionStatus> {
+    const status = await nativeAudioClient.requestPermissions();
+    this.appendEvents([
+      {
+        id: createDomainId('event'),
+        type: 'audio_permission_changed',
+        status,
+        occurredAt: status.checkedAt,
+      },
+    ]);
+    return status;
+  }
+
+  async startAudioRecording(args: {
+    meetingId?: string | null;
+    source?: AudioRecordingSource;
+  } = {}) {
+    if (this.timeline.activeAudioRecordingId != null) {
+      throw new Error('An audio recording is already running.');
+    }
+    if (this.timeline.currentSessionId == null) {
+      this.startSession();
+    }
+    const source = args.source ?? 'microphone';
+    const recordingId = createDomainId('recording');
+    const meetingId =
+      args.meetingId ??
+      this.timeline.activeMeetingCandidateId ??
+      null;
+    const outputPath = this.audioOutputPath(recordingId);
+    this.audioInFlight = true;
+    this.audioLastError = null;
+    this.currentNativeAudioRecordingId = recordingId;
+    this.broadcast();
+    try {
+      const started = await nativeAudioClient.startRecording({
+        outputPath,
+        source,
+      });
+      const recording: AudioRecordingView = {
+        recordingId,
+        sessionId: this.timeline.currentSessionId,
+        meetingId,
+        taskSegmentId: this.timeline.currentTaskSegmentId,
+        source,
+        status: 'recording',
+        startedAt: started.startedAt,
+        pausedAt: null,
+        resumedAt: null,
+        stoppedAt: null,
+        durationMs: null,
+        filePath: outputPath,
+        byteLength: null,
+        errorMessage: null,
+      };
+      this.appendEvents([
+        {
+          id: createDomainId('event'),
+          type: 'audio_recording_started',
+          recording,
+          occurredAt: recording.startedAt,
+        },
+      ]);
+      return this.snapshot();
+    } catch (error) {
+      const failedAt = createOccurredAt();
+      const shouldAppendFailure =
+        this.currentNativeAudioRecordingId === recordingId;
+      this.currentNativeAudioRecordingId = null;
+      this.audioInFlight = false;
+      this.audioLastError =
+        error instanceof Error ? error.message : 'Failed to start recording.';
+      if (shouldAppendFailure) {
+        this.appendEvents([
+          {
+            id: createDomainId('event'),
+            type: 'audio_recording_failed',
+            recordingId,
+            failedAt,
+            errorMessage: this.audioLastError,
+            occurredAt: failedAt,
+          },
+        ]);
+      }
+      throw error;
+    } finally {
+      this.audioInFlight = false;
+      this.broadcast();
+    }
+  }
+
+  pauseAudioRecording() {
+    const recordingId = this.timeline.activeAudioRecordingId;
+    if (recordingId == null) return this.snapshot();
+    nativeAudioClient.pauseRecording();
+    const pausedAt = createOccurredAt();
+    this.appendEvents([
+      {
+        id: createDomainId('event'),
+        type: 'audio_recording_paused',
+        recordingId,
+        pausedAt,
+        occurredAt: pausedAt,
+      },
+    ]);
+    return this.snapshot();
+  }
+
+  resumeAudioRecording() {
+    const recordingId = this.timeline.activeAudioRecordingId;
+    if (recordingId == null) return this.snapshot();
+    nativeAudioClient.resumeRecording();
+    const resumedAt = createOccurredAt();
+    this.appendEvents([
+      {
+        id: createDomainId('event'),
+        type: 'audio_recording_resumed',
+        recordingId,
+        resumedAt,
+        occurredAt: resumedAt,
+      },
+    ]);
+    return this.snapshot();
+  }
+
+  stopAudioRecording() {
+    if (this.timeline.activeAudioRecordingId == null) return this.snapshot();
+    nativeAudioClient.stopRecording();
+    return this.snapshot();
+  }
+
+  deleteAudioRecording(args: {recordingId: string}) {
+    const recording = this.timeline.audioRecordingsById[args.recordingId];
+    if (recording?.filePath != null && existsSync(recording.filePath)) {
+      unlinkSync(recording.filePath);
+    }
+    const deletedAt = createOccurredAt();
+    this.appendEvents([
+      {
+        id: createDomainId('event'),
+        type: 'audio_recording_deleted',
+        recordingId: args.recordingId,
+        deletedAt,
+        occurredAt: deletedAt,
+      },
+    ]);
+    return this.snapshot();
+  }
+
+  dismissMeetingPrompt(args: {
+    meetingId: string;
+    reason?: 'user_dismissed' | 'not_a_meeting' | 'cooldown';
+  }) {
+    const dismissedAt = createOccurredAt();
+    this.appendEvents([
+      {
+        id: createDomainId('event'),
+        type: 'meeting_prompt_dismissed',
+        meetingId: args.meetingId,
+        dismissedAt,
+        reason: args.reason ?? 'user_dismissed',
+        occurredAt: dismissedAt,
+      },
+    ]);
+    return this.snapshot();
+  }
+
+  private audioOutputPath(recordingId: string): string {
+    const now = new Date();
+    const datePart = now.toISOString().slice(0, 10);
+    const directory = path.join(app.getPath('userData'), 'audio', datePart);
+    mkdirSync(directory, {recursive: true});
+    return path.join(directory, `${recordingId}.m4a`);
+  }
+
+  private async transcribeRecording(recordingId: string, filePath: string) {
+    const result = await nativeAudioClient.transcribeFile({filePath});
+    const transcript: AudioTranscriptView = {
+      transcriptId: createDomainId('transcript'),
+      recordingId,
+      generatedAt: result.generatedAt,
+      model: 'macos-speech',
+      durationMs: result.durationMs,
+      segments:
+        result.segments.length > 0
+          ? result.segments
+          : [
+              {
+                startMs: 0,
+                endMs: 0,
+                speaker: null,
+                text: result.transcript,
+              },
+            ],
+    };
+    this.appendEvents([
+      {
+        id: createDomainId('event'),
+        type: 'audio_transcript_generated',
+        transcript,
+        occurredAt: transcript.generatedAt,
+      },
+    ]);
+  }
+
+  getDiagnostics() {
+    return buildTimelineDiagnostics({
+      timeline: this.timeline,
+      eventLog: this.eventLog,
+      captureEnabled: this.captureEnabled,
+    });
+  }
+
+  async runDiagnosticReplan(args: {sessionId?: string | null} = {}) {
+    await this.runPlannerRevision({
+      force: true,
+      cause: 'diagnostic_repair',
+      sessionIdOverride: args.sessionId,
+    });
+    return this.snapshot();
+  }
 }
 
 export const timelineService = new ElectronTimelineService();
@@ -531,6 +1109,12 @@ export function registerTimelineIpcHandlers() {
   ipcMain.handle('flow:timeline:captureNow', () => timelineService.captureNow());
   ipcMain.handle('flow:timeline:runPlannerRevision', (_event, force: boolean) =>
     timelineService.runPlannerRevision(force),
+  );
+  ipcMain.handle('flow:timeline:getDiagnostics', () =>
+    timelineService.getDiagnostics(),
+  );
+  ipcMain.handle('flow:timeline:runDiagnosticReplan', (_event, args) =>
+    timelineService.runDiagnosticReplan(args),
   );
   ipcMain.handle('flow:timeline:editBlockNotes', (_event, args) =>
     timelineService.editBlockNotes(args),

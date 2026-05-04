@@ -1,5 +1,13 @@
 import type {ChatMessage} from '../../src/chat/runChat';
+import type {
+  AudioPermissionStatus,
+  AudioRecordingRuntimeState,
+  AudioRecordingSource,
+} from '../../src/audio/types';
 import type {CostSummary} from '../../src/planner/costSummary';
+import type {PlannerRevisionCause} from '../../src/planner/types';
+import type {MeetingCandidateView} from '../../src/meeting/types';
+import type {TimelineDiagnosticsReport} from '../../src/timeline/diagnostics';
 import type {TimelineView} from '../../src/timeline/eventLog';
 import type {WorklogCalendarBlock} from '../../src/worklog/types';
 export type {CalendarView} from './dateUtils';
@@ -16,7 +24,7 @@ export type TimelineUiState = {
   lastSavedAt: string | null;
   continuousModeState: {
     enabled: boolean;
-    currentMode: 'off' | 'capturing' | 'observing' | 'error';
+    currentMode: 'off' | 'capturing' | 'observing' | 'paused' | 'error';
     statusMessage: string;
     lastObservedAt: string | null;
     lastObservedFrameHash: string | null;
@@ -25,11 +33,28 @@ export type TimelineUiState = {
   plannerRuntimeState: {
     inFlight: boolean;
     lastRunAt: string | null;
+    lastRunCause: PlannerRevisionCause | null;
     lastSnapshotId: string | null;
     lastFailureMessage: string | null;
+    lastSkippedReason: string | null;
+    consecutiveFailureCount: number;
   };
+  audioRuntimeState: AudioRecordingRuntimeState;
+  activeMeetingCandidate: MeetingCandidateView | null;
+  audioPermissionStatus: AudioPermissionStatus | null;
+  diagnostics: TimelineDiagnosticsReport | null;
   runCaptureNow: () => Promise<void>;
   runPlannerRevisionNow: (force?: boolean) => Promise<void>;
+  runDiagnosticReplan: () => Promise<void>;
+  requestAudioPermissions: () => Promise<void>;
+  startMeetingRecording: (
+    meetingId?: string | null,
+    source?: AudioRecordingSource,
+  ) => Promise<void>;
+  pauseAudioRecording: () => Promise<void>;
+  resumeAudioRecording: () => Promise<void>;
+  stopAudioRecording: () => Promise<void>;
+  dismissMeetingPrompt: (meetingId: string) => Promise<void>;
   startSession: () => void;
   stopSession: () => Promise<void>;
 };
