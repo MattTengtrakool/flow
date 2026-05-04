@@ -813,6 +813,65 @@ describe('getDayWorklog', () => {
     expect(worklog.blocks[0].title).toBe('Morning research');
     expect(worklog.blocks[1].title).toBe('Afternoon coding');
   });
+
+  test('drops stale single-observation planner blocks with no task anchor', () => {
+    const observations = [
+      makeObservation({
+        id: 'obs_1',
+        observedAt: '2026-04-17T07:47:00.000Z',
+        structured: {
+          summary: 'Looked at the Flow schedule view.',
+          activityType: 'planning',
+          taskHypothesis: 'Flow schedule view',
+          entities: {
+            apps: ['Flow'],
+            documents: [],
+            tickets: [],
+            repos: [],
+            urls: [],
+            people: [],
+          },
+        },
+      }),
+    ];
+    const snapshot = makeSnapshot({
+      snapshotId: 'snap_overnight',
+      windowStartAt: '2026-04-17T07:00:00.000Z',
+      windowEndAt: '2026-04-17T17:00:00.000Z',
+      blocks: [
+        {
+          id: 'block_overnight',
+          startAt: '2026-04-17T07:47:00.000Z',
+          endAt: '2026-04-17T16:47:00.000Z',
+          headline: 'Flow schedule view',
+          narrative: 'Looked at the Flow schedule view.',
+          label: 'worked_on',
+          category: 'planning',
+          confidence: 0.62,
+          keyActivities: ['Looked at the Flow schedule view'],
+          artifacts: {
+            apps: ['Flow'],
+            repositories: [],
+            urls: [],
+            tickets: [],
+            documents: [],
+            people: [],
+          },
+          reasonCodes: ['single_observation'],
+          sourceObservationIds: ['obs_1'],
+        },
+      ],
+    });
+    const timeline = timelineWithObservations(observations, [snapshot]);
+
+    const worklog = getDayWorklog(
+      timeline,
+      '2026-04-17T12:00:00.000Z',
+      timezone,
+    );
+
+    expect(worklog.blocks).toHaveLength(0);
+  });
 });
 
 describe('headline task-anchoring', () => {

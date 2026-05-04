@@ -5,17 +5,17 @@ import {
   type TimelineView,
   type UserBlockCorrectionView,
 } from '../timeline/eventLog';
-import type {
-  WorklogCalendarBlock,
-  WorklogDayView,
-} from '../worklog/types';
-import {pruneOutlierObservationIds} from './revisionEngine';
-import {mapBlockToWorklogCalendarBlock, type PlanBlock} from './types';
-import type {TaskSegmentView} from '../tasks/types';
-import {repairTaskTitle} from '../tasks/title';
+import type { WorklogCalendarBlock, WorklogDayView } from '../worklog/types';
+import { pruneOutlierObservationIds } from './revisionEngine';
+import { mapBlockToWorklogCalendarBlock, type PlanBlock } from './types';
+import type { TaskSegmentView } from '../tasks/types';
+import { repairTaskTitle } from '../tasks/title';
 
 const READ_TIME_BLOCK_BUFFER_MS = 2 * 60 * 1000;
 const COVERAGE_GAP_MS = 3 * 60 * 1000;
+const MAX_STABLE_SCREEN_EXTENSION_MS = 30 * 60 * 1000;
+const MAX_ANCHORED_SINGLE_OBSERVATION_BLOCK_MS = 45 * 60 * 1000;
+const MIN_UNANCHORED_BLOCK_DISPLAY_MS = 3 * 60 * 1000;
 
 // Cache formatters by timezone — timezone changes are rare (effectively once per session)
 const dateKeyFormatters = new Map<string, Intl.DateTimeFormat>();
@@ -47,19 +47,33 @@ function cleanBlockOfOutliers(
   block: PlanBlock,
   observationsById: Record<string, ObservationView>,
 ): PlanBlock {
-  if (block.sourceObservationIds.length < 2) return block;
+  if (block.sourceObservationIds.length === 0) return block;
 
   const observationIndex = new Map<string, ObservationView>();
   for (const id of block.sourceObservationIds) {
     const observation = observationsById[id];
     if (observation != null) observationIndex.set(id, observation);
   }
+  if (observationIndex.size === 0) return block;
 
-  const prunedIds = pruneOutlierObservationIds(
-    block.sourceObservationIds,
-    observationIndex,
-  );
-  if (prunedIds.length === block.sourceObservationIds.length) return block;
+  const originalStartMs = Date.parse(block.startAt);
+  const originalEndMs = Date.parse(block.endAt);
+  const originalDurationMs =
+    Number.isFinite(originalStartMs) && Number.isFinite(originalEndMs)
+      ? originalEndMs - originalStartMs
+      : Infinity;
+  if (
+    block.sourceObservationIds.length === 1 &&
+    hasPlanBlockTaskAnchor(block) &&
+    originalDurationMs <= MAX_ANCHORED_SINGLE_OBSERVATION_BLOCK_MS
+  ) {
+    return block;
+  }
+
+  const prunedIds =
+    block.sourceObservationIds.length > 1
+      ? pruneOutlierObservationIds(block.sourceObservationIds, observationIndex)
+      : block.sourceObservationIds;
 
   let earliestMs = Infinity;
   let latestMs = -Infinity;
@@ -73,13 +87,14 @@ function cleanBlockOfOutliers(
   }
   if (!Number.isFinite(earliestMs) || !Number.isFinite(latestMs)) return block;
 
-  const blockStartMs = Date.parse(block.startAt);
-  const blockEndMs = Date.parse(block.endAt);
   const newStartMs = Math.max(
-    blockStartMs,
+    Number.isNaN(originalStartMs) ? earliestMs : originalStartMs,
     earliestMs - READ_TIME_BLOCK_BUFFER_MS,
   );
-  const newEndMs = Math.min(blockEndMs, latestMs + READ_TIME_BLOCK_BUFFER_MS);
+  const newEndMs = Math.min(
+    Number.isNaN(originalEndMs) ? latestMs : originalEndMs,
+    latestMs + READ_TIME_BLOCK_BUFFER_MS,
+  );
   const safeEndMs = Math.max(newEndMs, newStartMs + 60 * 1000);
 
   return {
@@ -128,16 +143,23 @@ function selectPlanBlocksForDay(
 ): WorklogCalendarBlock[] {
   // Pre-parse snapshot windows once — shared across all blocks in this call
   const snapshotWindowMs = buildSnapshotWindowMs(timeline);
-  const rawBlocks = selectBlocksForDay(timeline, snapshotWindowMs, targetDayKey, timezone);
+  const rawBlocks = selectBlocksForDay(
+    timeline,
+    snapshotWindowMs,
+    targetDayKey,
+    timezone,
+  );
   const blocks = rawBlocks.map(block =>
     cleanBlockOfOutliers(block, timeline.observationsById),
   );
-  return blocks.map(block =>
-    applyUserCorrections(mapBlockToWorklogCalendarBlock(block), timeline),
-  );
+  return blocks
+    .map(block =>
+      applyUserCorrections(mapBlockToWorklogCalendarBlock(block), timeline),
+    )
+    .filter(isDisplayableWorklogBlock);
 }
 
-type SnapshotWindowMs = {startMs: number; endMs: number};
+type SnapshotWindowMs = { startMs: number; endMs: number };
 
 function buildSnapshotWindowMs(timeline: TimelineView): SnapshotWindowMs[] {
   return timeline.planSnapshots.map(s => ({
@@ -196,7 +218,7 @@ function isBlockSupersededByLaterSnapshot(
   const midpointMs = blockStartMs + (blockEndMs - blockStartMs) / 2;
 
   for (let j = snapshotWindowMs.length - 1; j > currentIndex; j -= 1) {
-    const {startMs, endMs} = snapshotWindowMs[j];
+    const { startMs, endMs } = snapshotWindowMs[j];
     if (midpointMs >= startMs && midpointMs <= endMs) {
       return true;
     }
@@ -254,9 +276,11 @@ export function getWorklogForDates(
     const blocks = rawBlocks.map(block =>
       cleanBlockOfOutliers(block, timeline.observationsById),
     );
-    result[targetDayKey] = blocks.map(block =>
-      applyUserCorrections(mapBlockToWorklogCalendarBlock(block), timeline),
-    );
+    result[targetDayKey] = blocks
+      .map(block =>
+        applyUserCorrections(mapBlockToWorklogCalendarBlock(block), timeline),
+      )
+      .filter(isDisplayableWorklogBlock);
   }
   return result;
 }
@@ -281,7 +305,8 @@ export function getAllPlanCalendarBlocks(
       if (seenIds.has(block.id)) continue;
       const sourceHash = hashSources(block.sourceObservationIds);
       if (sourceHash.length > 0 && seenSourceHashes.has(sourceHash)) continue;
-      if (isBlockSupersededByLaterSnapshot(snapshotWindowMs, i, block)) continue;
+      if (isBlockSupersededByLaterSnapshot(snapshotWindowMs, i, block))
+        continue;
       if (taskDayKeys.has(block.startAt.slice(0, 10))) continue;
 
       seenIds.add(block.id);
@@ -295,7 +320,8 @@ export function getAllPlanCalendarBlocks(
     .map(block => cleanBlockOfOutliers(block, timeline.observationsById))
     .map(block =>
       applyUserCorrections(mapBlockToWorklogCalendarBlock(block), timeline),
-    );
+    )
+    .filter(isDisplayableWorklogBlock);
 
   return [...taskBlocks, ...planBlocks].sort((a, b) =>
     a.startTime.localeCompare(b.startTime),
@@ -308,31 +334,34 @@ function selectTaskBlocksForDay(
   timezone: string,
 ): WorklogCalendarBlock[] {
   return selectAllTaskBlocks(timeline)
-    .filter(block => blockMidpointMatchesDay(
-      {
-        id: block.id,
-        startAt: block.startTime,
-        endAt: block.endTime,
-        headline: block.title,
-        narrative: block.summary.narrative,
-        label: block.label,
-        category: (block.category ?? 'other') as PlanBlock['category'],
-        confidence: block.confidence,
-        keyActivities: block.keyActivities ?? [],
-        artifacts: {
-          apps: block.apps,
-          repositories: block.repos,
-          urls: block.urls ?? [],
-          tickets: block.tickets,
-          documents: block.documents,
-          people: block.people ?? [],
+    .filter(block =>
+      blockMidpointMatchesDay(
+        {
+          id: block.id,
+          startAt: block.startTime,
+          endAt: block.endTime,
+          headline: block.title,
+          narrative: block.summary.narrative,
+          label: block.label,
+          category: (block.category ?? 'other') as PlanBlock['category'],
+          confidence: block.confidence,
+          keyActivities: block.keyActivities ?? [],
+          artifacts: {
+            apps: block.apps,
+            repositories: block.repos,
+            urls: block.urls ?? [],
+            tickets: block.tickets,
+            documents: block.documents,
+            people: block.people ?? [],
+          },
+          reasonCodes: block.reasonCodes,
+          sourceObservationIds:
+            block.summary.provenance.supportedByObservationIds,
         },
-        reasonCodes: block.reasonCodes,
-        sourceObservationIds: block.summary.provenance.supportedByObservationIds,
-      },
-      targetDayKey,
-      timezone,
-    ))
+        targetDayKey,
+        timezone,
+      ),
+    )
     .sort((a, b) => a.startTime.localeCompare(b.startTime));
 }
 
@@ -343,6 +372,7 @@ function selectAllTaskBlocks(timeline: TimelineView): WorklogCalendarBlock[] {
     .map(segment => mapTaskSegmentToWorklogBlock(segment, timeline))
     .filter((block): block is WorklogCalendarBlock => block != null)
     .map(block => applyUserCorrections(block, timeline))
+    .filter(isDisplayableWorklogBlock)
     .sort((a, b) => a.startTime.localeCompare(b.startTime));
 }
 
@@ -354,7 +384,9 @@ function mapTaskSegmentToWorklogBlock(
   if (range == null) return null;
   const observations = segment.observationIds
     .map(id => timeline.observationsById[id])
-    .filter((observation): observation is ObservationView => observation != null);
+    .filter(
+      (observation): observation is ObservationView => observation != null,
+    );
   const reasonCodes = Array.from(
     new Set(
       timeline.taskDecisionOrder
@@ -378,7 +410,10 @@ function mapTaskSegmentToWorklogBlock(
     ),
   );
   const rawTitle =
-    segment.finalTitle ?? segment.liveTitle ?? observations.at(-1)?.structured?.taskHypothesis ?? 'Working';
+    segment.finalTitle ??
+    segment.liveTitle ??
+    observations.at(-1)?.structured?.taskHypothesis ??
+    'Working';
   const observationSummaries = observations
     .map(observation => observation.structured?.summary ?? observation.text)
     .filter(value => value.trim().length > 0);
@@ -395,7 +430,10 @@ function mapTaskSegmentToWorklogBlock(
     preferAnchors: true,
   });
   const narrative =
-    segment.finalSummary ?? segment.liveSummary ?? observations.at(-1)?.text ?? title;
+    segment.finalSummary ??
+    segment.liveSummary ??
+    observations.at(-1)?.text ??
+    title;
   const category = mode(
     observations.flatMap(observation =>
       observation.structured?.activityType != null
@@ -440,12 +478,14 @@ function mapTaskSegmentToWorklogBlock(
     notesKey: computeTaskNotesKey(segment),
     continuityLinkage: {
       resumedFromLineageId: null,
-      resumedSegmentCount: timeline.taskLineagesById[segment.lineageId]?.segmentIds.length ?? 1,
+      resumedSegmentCount:
+        timeline.taskLineagesById[segment.lineageId]?.segmentIds.length ?? 1,
     },
     debug: {
       decisionModes,
       decisionCount: decisionModes.length,
-      retroAdjusted: segment.state === 'reconciled' || segment.state === 'finalized',
+      retroAdjusted:
+        segment.state === 'reconciled' || segment.state === 'finalized',
     },
   };
 }
@@ -457,14 +497,16 @@ function computeTaskNotesKey(segment: TaskSegmentView): string {
 
 function flattenTaskArtifacts(segment: TaskSegmentView): string[] {
   return Array.from(
-    new Set([
-      ...segment.entityMemory.repos,
-      ...segment.entityMemory.ticketIds,
-      ...segment.entityMemory.documents,
-      ...segment.entityMemory.urls,
-      ...segment.entityMemory.apps,
-      ...segment.entityMemory.people,
-    ].filter(value => value.trim().length > 0)),
+    new Set(
+      [
+        ...segment.entityMemory.repos,
+        ...segment.entityMemory.ticketIds,
+        ...segment.entityMemory.documents,
+        ...segment.entityMemory.urls,
+        ...segment.entityMemory.apps,
+        ...segment.entityMemory.people,
+      ].filter(value => value.trim().length > 0),
+    ),
   ).slice(0, 12);
 }
 
@@ -478,7 +520,7 @@ function mode(values: string[]): string | null {
 function computeTaskSegmentRange(
   segment: TaskSegmentView,
   timeline: TimelineView,
-): {startAt: string; endAt: string} | null {
+): { startAt: string; endAt: string } | null {
   const observationTimes = segment.observationIds
     .map(id => timeline.observationsById[id]?.observedAt)
     .filter((value): value is string => value != null)
@@ -493,18 +535,15 @@ function computeTaskSegmentRange(
       segment.lastActiveTime,
   );
   const firstObservationMs = Date.parse(observationTimes[0]);
-  const lastObservationMs = Date.parse(observationTimes[observationTimes.length - 1]);
+  const lastObservationMs = Date.parse(
+    observationTimes[observationTimes.length - 1],
+  );
   const coverageEndMs = computeStableCoverageEndMs(
     timeline,
     lastObservationMs,
     Number.isNaN(hardEndMs) ? lastObservationMs : hardEndMs,
   );
-  const evidenceEndMs =
-    timeline.captureRecordOrder.length === 0
-      ? Number.isNaN(hardEndMs)
-        ? lastObservationMs
-        : hardEndMs
-      : coverageEndMs;
+  const evidenceEndMs = coverageEndMs;
   const endMs = Math.max(
     lastObservationMs + 60 * 1000,
     Math.min(
@@ -512,9 +551,14 @@ function computeTaskSegmentRange(
       Math.max(evidenceEndMs, lastObservationMs),
     ),
   );
+  const safeStartMs =
+    Number.isNaN(startMs) ||
+    startMs < firstObservationMs - READ_TIME_BLOCK_BUFFER_MS
+      ? firstObservationMs
+      : startMs;
 
   return {
-    startAt: new Date(Number.isNaN(startMs) ? firstObservationMs : startMs).toISOString(),
+    startAt: new Date(safeStartMs).toISOString(),
     endAt: new Date(endMs).toISOString(),
   };
 }
@@ -531,7 +575,7 @@ function captureSignatureAt(
   timeline: TimelineView,
   observedMs: number,
 ): string | null {
-  let best: {delta: number; signature: string} | null = null;
+  let best: { delta: number; signature: string } | null = null;
   for (const id of timeline.captureRecordOrder) {
     const record = timeline.captureRecordsById[id];
     if (record == null || record.capture.status !== 'captured') continue;
@@ -540,7 +584,7 @@ function captureSignatureAt(
     if (delta > 1500) continue;
     const signature = captureSignature(record.capture);
     if (signature == null) continue;
-    if (best == null || delta < best.delta) best = {delta, signature};
+    if (best == null || delta < best.delta) best = { delta, signature };
   }
   return best?.signature ?? null;
 }
@@ -567,16 +611,20 @@ function computeStableCoverageEndMs(
   hardEndMs: number,
 ): number {
   const signature = captureSignatureAt(timeline, observedMs);
-  if (signature == null) return hardEndMs;
+  if (signature == null) return observedMs;
 
   let latestMs = observedMs;
   let previousMs = observedMs;
+  const maxExtensionMs = Math.min(
+    hardEndMs,
+    observedMs + MAX_STABLE_SCREEN_EXTENSION_MS,
+  );
   for (const id of timeline.captureRecordOrder) {
     const record = timeline.captureRecordsById[id];
     if (record == null || record.capture.status !== 'captured') continue;
     const capturedMs = Date.parse(record.capturedAt);
     if (capturedMs <= observedMs) continue;
-    if (capturedMs > hardEndMs) break;
+    if (capturedMs > maxExtensionMs) break;
     if (capturedMs - previousMs > COVERAGE_GAP_MS) break;
     if (isIdleAt(timeline, capturedMs)) break;
     if (captureSignature(record.capture) !== signature) break;
@@ -586,15 +634,49 @@ function computeStableCoverageEndMs(
   return latestMs;
 }
 
+function isDisplayableWorklogBlock(block: WorklogCalendarBlock): boolean {
+  if (block.source === 'user_calendar') return true;
+
+  const durationMs = Math.max(
+    0,
+    Date.parse(block.endTime) - Date.parse(block.startTime),
+  );
+  if (durationMs >= MIN_UNANCHORED_BLOCK_DISPLAY_MS) return true;
+  if (block.summary.provenance.supportedByObservationIds.length > 1) {
+    return true;
+  }
+  return hasTaskAnchor(block);
+}
+
+function hasTaskAnchor(block: WorklogCalendarBlock): boolean {
+  return (
+    block.repos.length > 0 ||
+    block.tickets.length > 0 ||
+    block.documents.length > 0 ||
+    (block.urls?.length ?? 0) > 0 ||
+    (block.calendarEventIds?.length ?? 0) > 0
+  );
+}
+
+function hasPlanBlockTaskAnchor(block: PlanBlock): boolean {
+  return (
+    block.artifacts.repositories.length > 0 ||
+    block.artifacts.tickets.length > 0 ||
+    block.artifacts.documents.length > 0 ||
+    block.artifacts.urls.length > 0 ||
+    (block.calendarEventIds?.length ?? 0) > 0
+  );
+}
+
 function isIdleAt(timeline: TimelineView, atMs: number): boolean {
-  let latest: {ms: number; isIdle: boolean} | null = null;
+  let latest: { ms: number; isIdle: boolean } | null = null;
   for (const id of timeline.contextSnapshotOrder) {
     const snapshot = timeline.contextSnapshotsById[id];
     if (snapshot == null) continue;
     const ms = Date.parse(snapshot.recordedAt);
     if (Number.isNaN(ms) || ms > atMs) continue;
     if (latest == null || ms > latest.ms) {
-      latest = {ms, isIdle: snapshot.isIdle};
+      latest = { ms, isIdle: snapshot.isIdle };
     }
   }
   return latest?.isIdle === true;

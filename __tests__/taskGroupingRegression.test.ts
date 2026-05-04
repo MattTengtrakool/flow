@@ -293,6 +293,190 @@ describe('live task grouping regression coverage', () => {
     expect(worklog.blocks[0].title).toBe('Flow CLAUDE.md');
   });
 
+  test('does not stretch a lone live observation to a later session stop', () => {
+    const structured: StructuredObservation = {
+      summary: 'Edited Flow CLAUDE.md in Cursor.',
+      activityType: 'writing',
+      taskHypothesis: 'Flow CLAUDE.md',
+      confidence: 0.88,
+      sensitivity: 'low',
+      sensitivityReason: 'Routine project documentation.',
+      artifacts: ['Flow CLAUDE.md'],
+      entities: {
+        apps: ['Cursor'],
+        documents: ['Flow CLAUDE.md'],
+        tickets: [],
+        repos: ['flow'],
+        urls: [],
+        people: [],
+      },
+      nextAction: null,
+    };
+    const anchoredSegment = segment();
+    anchoredSegment.startTime = '2026-05-03T07:47:00.000Z';
+    anchoredSegment.lastActiveTime = '2026-05-03T07:47:00.000Z';
+    anchoredSegment.liveTitle = 'Flow CLAUDE.md';
+    anchoredSegment.liveSummary = structured.summary;
+    anchoredSegment.entityMemory.documents = ['Flow CLAUDE.md'];
+    anchoredSegment.entityMemory.repos = ['flow'];
+
+    const timeline = replayEventLog([
+      {
+        id: 'event_session_start',
+        type: 'session_started',
+        sessionId: 'session_1',
+        title: 'Session 1',
+        occurredAt: '2026-05-03T07:47:00.000Z',
+      },
+      {
+        id: 'event_obs_1',
+        type: 'observation_added',
+        observationId: 'obs_1',
+        sessionId: 'session_1',
+        text: structured.summary,
+        structured,
+        occurredAt: '2026-05-03T07:47:00.000Z',
+      },
+      {
+        id: 'event_segment_1',
+        type: 'task_segment_started',
+        segment: anchoredSegment,
+        occurredAt: '2026-05-03T07:47:00.000Z',
+      },
+      {
+        id: 'event_decision_1',
+        type: 'task_decision_recorded',
+        decisionId: 'decision_1',
+        occurredAt: '2026-05-03T07:47:00.000Z',
+        decision: {
+          id: 'decision_1',
+          observationId: 'obs_1',
+          occurredAt: '2026-05-03T07:47:00.000Z',
+          decision: 'start_new',
+          targetSegmentId: 'segment_1',
+          targetLineageId: 'lineage_1',
+          decisionMode: 'deterministic',
+          reasonCodes: ['no_active_segment'],
+          reasonText: 'Started a new segment.',
+          confidence: 1,
+          usedLlm: false,
+          candidateShortlist: [],
+          featureSnapshot: null,
+          stale: false,
+          errorReason: null,
+        },
+      },
+      {
+        id: 'event_session_stop',
+        type: 'session_stopped',
+        sessionId: 'session_1',
+        occurredAt: '2026-05-03T16:47:00.000Z',
+      },
+    ]);
+
+    const worklog = getDayWorklog(timeline, '2026-05-03', 'UTC');
+
+    expect(worklog.blocks).toHaveLength(1);
+    expect(worklog.blocks[0].title).toBe('Flow CLAUDE.md');
+    expect(
+      Date.parse(worklog.blocks[0].endTime) -
+        Date.parse(worklog.blocks[0].startTime),
+    ).toBe(60 * 1000);
+  });
+
+  test('hides unanchored one-minute live blips from the worklog', () => {
+    const structured: StructuredObservation = {
+      summary: 'Looked at the Flow schedule view.',
+      activityType: 'planning',
+      taskHypothesis: 'Flow schedule view',
+      confidence: 0.62,
+      sensitivity: 'low',
+      sensitivityReason: 'Routine app navigation.',
+      artifacts: [],
+      entities: {
+        apps: ['Flow'],
+        documents: [],
+        tickets: [],
+        repos: [],
+        urls: [],
+        people: [],
+      },
+      nextAction: null,
+    };
+    const weakSegment = segment();
+    weakSegment.startTime = '2026-05-03T07:47:00.000Z';
+    weakSegment.lastActiveTime = '2026-05-03T07:47:00.000Z';
+    weakSegment.liveTitle = 'Flow schedule view';
+    weakSegment.liveSummary = structured.summary;
+    weakSegment.entityMemory = {
+      apps: ['Flow'],
+      repos: [],
+      ticketIds: [],
+      projects: [],
+      documents: [],
+      people: [],
+      urls: [],
+    };
+
+    const timeline = replayEventLog([
+      {
+        id: 'event_session_start',
+        type: 'session_started',
+        sessionId: 'session_1',
+        title: 'Session 1',
+        occurredAt: '2026-05-03T07:47:00.000Z',
+      },
+      {
+        id: 'event_obs_1',
+        type: 'observation_added',
+        observationId: 'obs_1',
+        sessionId: 'session_1',
+        text: structured.summary,
+        structured,
+        occurredAt: '2026-05-03T07:47:00.000Z',
+      },
+      {
+        id: 'event_segment_1',
+        type: 'task_segment_started',
+        segment: weakSegment,
+        occurredAt: '2026-05-03T07:47:00.000Z',
+      },
+      {
+        id: 'event_decision_1',
+        type: 'task_decision_recorded',
+        decisionId: 'decision_1',
+        occurredAt: '2026-05-03T07:47:00.000Z',
+        decision: {
+          id: 'decision_1',
+          observationId: 'obs_1',
+          occurredAt: '2026-05-03T07:47:00.000Z',
+          decision: 'start_new',
+          targetSegmentId: 'segment_1',
+          targetLineageId: 'lineage_1',
+          decisionMode: 'deterministic',
+          reasonCodes: ['no_active_segment'],
+          reasonText: 'Started a new segment.',
+          confidence: 1,
+          usedLlm: false,
+          candidateShortlist: [],
+          featureSnapshot: null,
+          stale: false,
+          errorReason: null,
+        },
+      },
+      {
+        id: 'event_session_stop',
+        type: 'session_stopped',
+        sessionId: 'session_1',
+        occurredAt: '2026-05-03T16:47:00.000Z',
+      },
+    ]);
+
+    const worklog = getDayWorklog(timeline, '2026-05-03', 'UTC');
+
+    expect(worklog.blocks).toHaveLength(0);
+  });
+
   test('replays live task segment events and uses them before planner snapshots', () => {
     const events: DomainEvent[] = [
       {
