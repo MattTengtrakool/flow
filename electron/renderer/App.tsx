@@ -15,6 +15,7 @@ import {getAllPlanCalendarBlocks, getWorklogForDates} from '../../src/planner/se
 import {computeBlockNotesKey} from '../../src/planner/types';
 import type {WorklogCalendarBlock} from '../../src/worklog/types';
 import {AppShell} from './components/AppShell';
+import {CompanionWindow} from './components/CompanionWindow';
 import {StatusBanners} from './components/StatusBanner';
 import {
   addDaysIso,
@@ -56,6 +57,10 @@ function mergeBlocksByDate(
 
 export function ElectronApp() {
   const timelineStore = useElectronTimeline(window.flow);
+  const isCompanionMode = useMemo(
+    () => new URLSearchParams(window.location.search).get('mode') === 'companion',
+    [],
+  );
   const [activeNav, setActiveNav] = useState<NavKey>('calendar');
   const [version, setVersion] = useState<string>('loading');
   const [permissionStatus, setPermissionStatus] = useState<string>('loading');
@@ -97,8 +102,12 @@ export function ElectronApp() {
     [],
   );
 
-  // Scope expensive selector re-runs to plan data changes only — not every capture event
+  // Task blocks use live task segments plus stable-screen capture coverage, so
+  // selector inputs include plan, task, observation, and capture changes.
   const planSnapshotsLength = timelineStore.timeline.planSnapshots.length;
+  const taskSegmentLength = timelineStore.timeline.taskSegmentOrder.length;
+  const observationLength = timelineStore.timeline.observationOrder.length;
+  const captureLength = timelineStore.timeline.captureRecordOrder.length;
   const calendarItemsVersion = useMemo(
     () =>
       timelineStore.timeline.calendarItemOrder
@@ -113,7 +122,14 @@ export function ElectronApp() {
   const planBlocksByDate = useMemo(
     () => getWorklogForDates(timelineStore.timeline, visibleDateIsos, timezone),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [planSnapshotsLength, visibleDateIsos, timezone],
+    [
+      planSnapshotsLength,
+      taskSegmentLength,
+      observationLength,
+      captureLength,
+      visibleDateIsos,
+      timezone,
+    ],
   );
   const calendarBlocksByDate = useMemo(
     () =>
@@ -136,7 +152,14 @@ export function ElectronApp() {
         getAllCalendarItemBlocks(timelineStore.timeline, timezone),
       ),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [planSnapshotsLength, calendarItemsVersion, timezone],
+    [
+      planSnapshotsLength,
+      taskSegmentLength,
+      observationLength,
+      captureLength,
+      calendarItemsVersion,
+      timezone,
+    ],
   );
   const costSummary = useMemo(
     () => computeCostSummary(timelineStore.timeline),
@@ -368,6 +391,10 @@ export function ElectronApp() {
           />
         );
     }
+  }
+
+  if (isCompanionMode) {
+    return <CompanionWindow timelineStore={timelineStore} />;
   }
 
   return (

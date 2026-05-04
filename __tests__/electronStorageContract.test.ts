@@ -24,8 +24,10 @@ describe('Electron event log storage contract', () => {
 
     expect(source).toContain("app.getPath('userData')");
     expect(source).toContain('await saveEventLog(parsed as DomainEvent[])');
-    expect(source).not.toContain('unlink');
-    expect(source).not.toContain('rm(');
+    expect(source).not.toContain('unlink(packagedPath');
+    expect(source).not.toContain('unlink(filePath');
+    expect(source).not.toContain('rm(packagedPath');
+    expect(source).not.toContain('rm(filePath');
   });
 
   test('rejects corrupt or non-array event log payloads', () => {
@@ -39,12 +41,17 @@ describe('Electron event log storage contract', () => {
     );
   });
 
-  test('persists with atomic temp-file rename and pretty JSON', () => {
+  test('persists with queued atomic temp-file rename and pretty JSON', () => {
     const source = fs.readFileSync(storageSourcePath, 'utf8');
 
-    expect(source).toContain("const temporaryPath = `${filePath}.tmp`");
+    expect(source).toContain('let saveEventLogQueue: Promise<void>');
     expect(source).toContain('JSON.stringify(eventLog, null, 2)');
+    expect(source).toContain('writeSerializedEventLog(serialized)');
+    expect(source).toContain(
+      'const temporaryPath = `${filePath}.${randomUUID()}.tmp`',
+    );
     expect(source).toContain('await fs.writeFile(temporaryPath');
     expect(source).toContain('await fs.rename(temporaryPath, filePath)');
+    expect(source).toContain('await fs.unlink(temporaryPath).catch(() => {})');
   });
 });

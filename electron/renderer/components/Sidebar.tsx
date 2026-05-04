@@ -69,10 +69,17 @@ export const Sidebar = memo(function Sidebar(props: {
   const {activeNav, onNavigate, timelineStore} = props;
   const hasSession = timelineStore.timeline.currentSessionId != null;
   const captureTone = hasSession
-    ? 'is-capturing'
+    ? timelineStore.continuousModeState.enabled
+      ? 'is-capturing'
+      : 'is-warning'
     : timelineStore.hydrationStatus !== 'ready'
       ? 'is-warning'
       : 'is-idle';
+  const captureLabel = hasSession
+    ? timelineStore.continuousModeState.enabled
+      ? 'Capturing'
+      : 'Paused'
+    : 'Idle';
 
   return (
     <aside className="sidebar">
@@ -102,7 +109,7 @@ export const Sidebar = memo(function Sidebar(props: {
         <div className="capture-status">
           <span className="capture-dot" />
           <div className="capture-status-text">
-            <strong>{hasSession ? 'Capturing' : 'Idle'}</strong>
+            <strong>{captureLabel}</strong>
             <p>{timelineStore.continuousModeState.statusMessage}</p>
           </div>
         </div>

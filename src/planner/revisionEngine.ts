@@ -39,6 +39,7 @@ export type RunPlannerRevisionArgs = {
   force?: boolean;
   apiKey?: string;
   model?: string;
+  sessionIdOverride?: string | null;
   runReplan?: (input: GeminiReplanInput) => Promise<GeminiReplanResult>;
   runFallbackReplan?: (
     input: GeminiReplanInput,
@@ -67,6 +68,10 @@ export async function runPlannerRevision(
   args: RunPlannerRevisionArgs,
 ): Promise<RunPlannerRevisionResult> {
   const {timeline} = args;
+  const targetSessionId =
+    args.sessionIdOverride !== undefined
+      ? args.sessionIdOverride
+      : timeline.currentSessionId;
   const nowMs = args.now != null ? Date.parse(args.now) : Date.now();
   const windowStartMs = nowMs - args.windowMs;
   const windowStartAt = new Date(windowStartMs).toISOString();
@@ -76,6 +81,7 @@ export async function runPlannerRevision(
     timeline,
     windowStartMs,
     nowMs,
+    targetSessionId,
   );
 
   if (observationsInWindow.length === 0) {
@@ -84,7 +90,7 @@ export async function runPlannerRevision(
 
   const previousSnapshot = findMostRecentSnapshotForSession(
     timeline,
-    timeline.currentSessionId,
+    targetSessionId,
   );
 
   if (
@@ -145,7 +151,7 @@ export async function runPlannerRevision(
       revisedAt: createOccurredAt(),
       windowStartAt,
       windowEndAt,
-      sessionId: timeline.currentSessionId,
+      sessionId: targetSessionId,
       blocks,
       model: result.model,
       promptVersion: result.promptVersion ?? PLANNER_PROMPT_VERSION,
@@ -408,6 +414,7 @@ function collectObservationsInWindow(
   timeline: TimelineView,
   windowStartMs: number,
   windowEndMs: number,
+  sessionId?: string | null,
 ): ObservationView[] {
   const results: ObservationView[] = [];
   for (const observationId of timeline.observationOrder) {
@@ -420,6 +427,13 @@ function collectObservationsInWindow(
       continue;
     }
     if (observedMs < windowStartMs || observedMs > windowEndMs) {
+      continue;
+    }
+    if (
+      sessionId != null &&
+      observation.sessionId != null &&
+      observation.sessionId !== sessionId
+    ) {
       continue;
     }
     results.push(observation);

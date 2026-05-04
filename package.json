@@ -18,10 +18,11 @@
     "electron:build": "pnpm electron:build:main && pnpm electron:build:renderer",
     "electron:build:main": "tsc -p electron/tsconfig.json",
     "electron:build:renderer": "vite build --config vite.config.ts",
-    "electron:dev": "pnpm electron:build:main && concurrently -k \"vite --config vite.config.ts\" \"wait-on http://localhost:5173 && electron .\"",
-    "electron:dist": "pnpm native-capture:build && pnpm electron:build && electron-builder --mac dir --mac zip",
-    "electron:dist:dmg": "pnpm native-capture:build && pnpm electron:build && electron-builder --mac dmg",
+    "electron:dev": "pnpm native-audio:build && pnpm electron:build:main && concurrently -k \"vite --config vite.config.ts\" \"wait-on http://localhost:5173 && electron .\"",
+    "electron:dist": "pnpm native-capture:build && pnpm native-audio:build && pnpm electron:build && electron-builder --mac dir --mac zip",
+    "electron:dist:dmg": "pnpm native-capture:build && pnpm native-audio:build && pnpm electron:build && electron-builder --mac dmg",
     "native-capture:build": "mkdir -p electron/native-capture/build && xcrun clang++ -std=c++17 -fobjc-arc -framework Foundation -framework AppKit -framework ApplicationServices -framework CoreGraphics -framework ScreenCaptureKit -framework Vision electron/native-capture/FlowNativeCapture.mm -o electron/native-capture/build/FlowNativeCapture",
+    "native-audio:build": "mkdir -p electron/native-audio/build && xcrun clang++ -std=c++17 -fobjc-arc -framework Foundation -framework AVFoundation -framework CoreGraphics -framework CoreMedia -framework ScreenCaptureKit -framework Speech -sectcreate __TEXT __info_plist electron/native-audio/Info.plist electron/native-audio/FlowAudioCapture.mm -o electron/native-audio/build/FlowAudioCapture",
     "doctor:node": "node ./scripts/ensureNodeCompatible.js",
     "lint": "eslint .",
     "format": "prettier --write .",
@@ -88,6 +89,10 @@
       {
         "from": "electron/native-capture/build/FlowNativeCapture",
         "to": "native-capture/FlowNativeCapture"
+      },
+      {
+        "from": "electron/native-audio/build/FlowAudioCapture",
+        "to": "native-audio/FlowAudioCapture"
       }
     ],
     "mac": {
@@ -98,6 +103,10 @@
       "icon": "brand/flow-icon-1024.png",
       "entitlements": "electron/entitlements.mac.plist",
       "entitlementsInherit": "electron/entitlements.mac.plist",
+      "extendInfo": {
+        "NSMicrophoneUsageDescription": "Flow records meeting audio only when you explicitly start recording.",
+        "NSSpeechRecognitionUsageDescription": "Flow transcribes meeting recordings locally through macOS Speech when you ask it to process a recording."
+      },
       "target": [
         "dir",
         "dmg",

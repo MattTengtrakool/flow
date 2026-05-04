@@ -3,6 +3,14 @@ import type {
   CalendarItemUpdate,
   CreateCalendarItemInput,
 } from '../../src/calendar/types';
+import type {
+  AudioPermissionStatus,
+  AudioRecordingRuntimeState,
+  AudioRecordingSource,
+} from '../../src/audio/types';
+import type {MeetingCandidateView} from '../../src/meeting/types';
+import type {PlannerRevisionCause, TaskPlanRevisionFailure} from '../../src/planner/types';
+import type {TimelineDiagnosticsReport} from '../../src/timeline/diagnostics';
 import type {DomainEvent} from '../../src/timeline/eventLog';
 import type {TimelineView} from '../../src/timeline/eventLog';
 import type {
@@ -36,11 +44,26 @@ export type TimelineStatePayload = {
   captureEnabled: boolean;
   captureStatusMessage: string;
   plannerInFlight: boolean;
+  plannerRuntimeState: {
+    lastRunAt: string | null;
+    lastRunCause: PlannerRevisionCause | null;
+    lastSnapshotId: string | null;
+    lastFailure: TaskPlanRevisionFailure | null;
+    lastSkippedReason: string | null;
+    consecutiveFailureCount: number;
+  };
+  audioRuntimeState: AudioRecordingRuntimeState;
+  activeMeetingCandidate: MeetingCandidateView | null;
+  diagnostics: TimelineDiagnosticsReport;
 };
 
 export type FlowElectronApi = {
   app: {
     getVersion: () => Promise<string>;
+  };
+  companion: {
+    setVisible: (visible: boolean) => Promise<void>;
+    setContentHeight: (height: number) => Promise<void>;
   };
   storage: {
     loadEventLog: () => Promise<PersistedEventLogPayload>;
@@ -66,12 +89,32 @@ export type FlowElectronApi = {
   chat: {
     runTurn: (args: RunChatTurnArgs) => Promise<RunChatTurnResult>;
   };
+  audio: {
+    getPermissionsStatus: () => Promise<AudioPermissionStatus>;
+    requestPermissions: () => Promise<AudioPermissionStatus>;
+    startRecording: (args?: {
+      meetingId?: string | null;
+      source?: AudioRecordingSource;
+    }) => Promise<unknown>;
+    pauseRecording: () => Promise<unknown>;
+    resumeRecording: () => Promise<unknown>;
+    stopRecording: () => Promise<unknown>;
+    deleteRecording: (args: {recordingId: string}) => Promise<unknown>;
+  };
+  meeting: {
+    dismissPrompt: (args: {
+      meetingId: string;
+      reason?: 'user_dismissed' | 'not_a_meeting' | 'cooldown';
+    }) => Promise<unknown>;
+  };
   timeline: {
     getState: () => Promise<TimelineStatePayload>;
     startSession: () => Promise<unknown>;
     stopSession: () => Promise<unknown>;
     captureNow: () => Promise<CaptureResultPayload>;
     runPlannerRevision: (force: boolean) => Promise<unknown>;
+    getDiagnostics: () => Promise<TimelineDiagnosticsReport>;
+    runDiagnosticReplan: (args?: {sessionId?: string | null}) => Promise<unknown>;
     editBlockNotes: (args: {
       notesKey: string;
       blockId: string | null;

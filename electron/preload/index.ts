@@ -6,6 +6,12 @@ const flowApi: FlowElectronApi = {
   app: {
     getVersion: (): Promise<string> => ipcRenderer.invoke('flow:app:getVersion'),
   },
+  companion: {
+    setVisible: visible =>
+      ipcRenderer.invoke('flow:companion:setVisible', visible),
+    setContentHeight: height =>
+      ipcRenderer.invoke('flow:companion:setContentHeight', height),
+  },
   storage: {
     loadEventLog: () => ipcRenderer.invoke('flow:storage:loadEventLog'),
     saveEventLog: eventLog =>
@@ -42,6 +48,22 @@ const flowApi: FlowElectronApi = {
   chat: {
     runTurn: args => ipcRenderer.invoke('flow:chat:runTurn', args),
   },
+  audio: {
+    getPermissionsStatus: () =>
+      ipcRenderer.invoke('flow:audio:getPermissionsStatus'),
+    requestPermissions: () =>
+      ipcRenderer.invoke('flow:audio:requestPermissions'),
+    startRecording: args =>
+      ipcRenderer.invoke('flow:audio:startRecording', args),
+    pauseRecording: () => ipcRenderer.invoke('flow:audio:pauseRecording'),
+    resumeRecording: () => ipcRenderer.invoke('flow:audio:resumeRecording'),
+    stopRecording: () => ipcRenderer.invoke('flow:audio:stopRecording'),
+    deleteRecording: args =>
+      ipcRenderer.invoke('flow:audio:deleteRecording', args),
+  },
+  meeting: {
+    dismissPrompt: args => ipcRenderer.invoke('flow:meeting:dismissPrompt', args),
+  },
   timeline: {
     getState: () => ipcRenderer.invoke('flow:timeline:getState'),
     startSession: () => ipcRenderer.invoke('flow:timeline:startSession'),
@@ -49,6 +71,9 @@ const flowApi: FlowElectronApi = {
     captureNow: () => ipcRenderer.invoke('flow:timeline:captureNow'),
     runPlannerRevision: force =>
       ipcRenderer.invoke('flow:timeline:runPlannerRevision', force),
+    getDiagnostics: () => ipcRenderer.invoke('flow:timeline:getDiagnostics'),
+    runDiagnosticReplan: args =>
+      ipcRenderer.invoke('flow:timeline:runDiagnosticReplan', args),
     editBlockNotes: args => ipcRenderer.invoke('flow:timeline:editBlockNotes', args),
     createCalendarItem: input =>
       ipcRenderer.invoke('flow:timeline:createCalendarItem', input),

@@ -3,6 +3,7 @@ import type React from 'react';
 
 import type {NavKey, TimelineUiState} from '../types';
 import {DetailPanel} from './DetailPanel';
+import {MeetingCompanion} from './MeetingCompanion';
 import {Sidebar} from './Sidebar';
 
 type DetailProps = React.ComponentProps<typeof DetailPanel>;
@@ -23,6 +24,7 @@ export const AppShell = memo(function AppShell(props: {
       />
       <section className="content">{props.children}</section>
       <DetailPanel {...props.detail} />
+      <MeetingCompanion timelineStore={props.timelineStore} />
     </main>
   );
 });

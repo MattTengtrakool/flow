@@ -1,5 +1,6 @@
 import {useCallback, useEffect, useMemo, useState} from 'react';
 
+import type {AudioRecordingSource} from '../../../src/audio/types';
 import {createEmptyTimeline, type TimelineView} from '../../../src/timeline/eventLog';
 import type {FlowElectronApi, TimelineStatePayload} from '../../shared/flowApi';
 
@@ -14,7 +15,7 @@ type StoreState = {
   lastSavedAt: string | null;
   continuousModeState: {
     enabled: boolean;
-    currentMode: 'off' | 'capturing' | 'observing' | 'error';
+    currentMode: 'off' | 'capturing' | 'observing' | 'paused' | 'error';
     statusMessage: string;
     lastObservedAt: string | null;
     lastObservedFrameHash: string | null;
@@ -23,9 +24,16 @@ type StoreState = {
   plannerRuntimeState: {
     inFlight: boolean;
     lastRunAt: string | null;
+    lastRunCause: TimelineStatePayload['plannerRuntimeState']['lastRunCause'];
     lastSnapshotId: string | null;
     lastFailureMessage: string | null;
+    lastSkippedReason: string | null;
+    consecutiveFailureCount: number;
   };
+  audioRuntimeState: TimelineStatePayload['audioRuntimeState'];
+  activeMeetingCandidate: TimelineStatePayload['activeMeetingCandidate'];
+  audioPermissionStatus: TimelineStatePayload['audioRuntimeState']['permissionStatus'];
+  diagnostics: TimelineStatePayload['diagnostics'] | null;
 };
 
 function initialState(): StoreState {
@@ -47,9 +55,21 @@ function initialState(): StoreState {
     plannerRuntimeState: {
       inFlight: false,
       lastRunAt: null,
+      lastRunCause: null,
       lastSnapshotId: null,
       lastFailureMessage: null,
+      lastSkippedReason: null,
+      consecutiveFailureCount: 0,
     },
+    audioRuntimeState: {
+      permissionStatus: null,
+      activeRecordingId: null,
+      inFlight: false,
+      lastError: null,
+    },
+    activeMeetingCandidate: null,
+    audioPermissionStatus: null,
+    diagnostics: null,
   };
 }
 
@@ -63,7 +83,12 @@ function stateFromPayload(payload: TimelineStatePayload): StoreState {
     lastSavedAt: null,
     continuousModeState: {
       enabled: payload.captureEnabled,
-      currentMode: payload.captureEnabled ? 'capturing' : 'off',
+      currentMode:
+        payload.captureEnabled
+          ? 'capturing'
+          : payload.timeline.currentSessionId != null
+            ? 'paused'
+            : 'off',
       statusMessage: payload.captureStatusMessage,
       lastObservedAt: null,
       lastObservedFrameHash: null,
@@ -71,10 +96,19 @@ function stateFromPayload(payload: TimelineStatePayload): StoreState {
     },
     plannerRuntimeState: {
       inFlight: payload.plannerInFlight,
-      lastRunAt: null,
-      lastSnapshotId: null,
-      lastFailureMessage: payload.errorMessage,
+      lastRunAt: payload.plannerRuntimeState.lastRunAt,
+      lastRunCause: payload.plannerRuntimeState.lastRunCause,
+      lastSnapshotId: payload.plannerRuntimeState.lastSnapshotId,
+      lastFailureMessage:
+        payload.plannerRuntimeState.lastFailure?.message ?? null,
+      lastSkippedReason: payload.plannerRuntimeState.lastSkippedReason,
+      consecutiveFailureCount:
+        payload.plannerRuntimeState.consecutiveFailureCount,
     },
+    audioRuntimeState: payload.audioRuntimeState,
+    activeMeetingCandidate: payload.activeMeetingCandidate,
+    audioPermissionStatus: payload.audioRuntimeState.permissionStatus,
+    diagnostics: payload.diagnostics,
   };
 }
 
@@ -128,6 +162,16 @@ export function useElectronTimeline(flow: FlowElectronApi | undefined) {
     [flow],
   );
 
+  const runDiagnosticReplan = useCallback(async () => {
+    if (flow?.timeline != null) {
+      await flow.timeline.runDiagnosticReplan({
+        sessionId: store.timeline.currentSessionId,
+      });
+      return;
+    }
+    throw new Error('Electron timeline bridge missing.');
+  }, [flow, store.timeline.currentSessionId]);
+
   const runCaptureNow = useCallback(async () => {
     if (flow?.timeline != null) {
       await flow.timeline.captureNow();
@@ -135,6 +179,66 @@ export function useElectronTimeline(flow: FlowElectronApi | undefined) {
     }
     throw new Error('Electron timeline bridge missing.');
   }, [flow]);
+
+  const requestAudioPermissions = useCallback(async () => {
+    if (flow?.audio != null) {
+      await flow.audio.requestPermissions();
+      return;
+    }
+    throw new Error('Electron audio bridge missing.');
+  }, [flow]);
+
+  const startMeetingRecording = useCallback(
+    async (
+      meetingId?: string | null,
+      source: AudioRecordingSource = 'microphone',
+    ) => {
+      if (flow?.audio != null) {
+        await flow.audio.startRecording({
+          meetingId: meetingId ?? store.activeMeetingCandidate?.meetingId ?? null,
+          source,
+        });
+        return;
+      }
+      throw new Error('Electron audio bridge missing.');
+    },
+    [flow, store.activeMeetingCandidate?.meetingId],
+  );
+
+  const pauseAudioRecording = useCallback(async () => {
+    if (flow?.audio != null) {
+      await flow.audio.pauseRecording();
+      return;
+    }
+    throw new Error('Electron audio bridge missing.');
+  }, [flow]);
+
+  const resumeAudioRecording = useCallback(async () => {
+    if (flow?.audio != null) {
+      await flow.audio.resumeRecording();
+      return;
+    }
+    throw new Error('Electron audio bridge missing.');
+  }, [flow]);
+
+  const stopAudioRecording = useCallback(async () => {
+    if (flow?.audio != null) {
+      await flow.audio.stopRecording();
+      return;
+    }
+    throw new Error('Electron audio bridge missing.');
+  }, [flow]);
+
+  const dismissMeetingPrompt = useCallback(
+    async (meetingId: string) => {
+      if (flow?.meeting != null) {
+        await flow.meeting.dismissPrompt({meetingId});
+        return;
+      }
+      throw new Error('Electron meeting bridge missing.');
+    },
+    [flow],
+  );
 
   const startSession = useCallback(() => {
     if (flow?.timeline != null) {
@@ -160,9 +264,29 @@ export function useElectronTimeline(flow: FlowElectronApi | undefined) {
       ...store,
       runCaptureNow,
       runPlannerRevisionNow,
+      runDiagnosticReplan,
+      requestAudioPermissions,
+      startMeetingRecording,
+      pauseAudioRecording,
+      resumeAudioRecording,
+      stopAudioRecording,
+      dismissMeetingPrompt,
       startSession,
       stopSession,
     }),
-    [store, runCaptureNow, runPlannerRevisionNow, startSession, stopSession],
+    [
+      store,
+      runCaptureNow,
+      runPlannerRevisionNow,
+      runDiagnosticReplan,
+      requestAudioPermissions,
+      startMeetingRecording,
+      pauseAudioRecording,
+      resumeAudioRecording,
+      stopAudioRecording,
+      dismissMeetingPrompt,
+      startSession,
+      stopSession,
+    ],
   );
 }

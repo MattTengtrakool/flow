@@ -280,6 +280,67 @@ describe('runPlannerRevision', () => {
     expect(result.snapshot.sessionId).toBe('session_1');
   });
 
+  test('can revise a stopped session by explicit session override', async () => {
+    const observations = [
+      makeObservation({
+        id: 'obs_old',
+        observedAt: '2026-04-17T13:00:00.000Z',
+      }),
+      makeObservation({
+        id: 'obs_new',
+        observedAt: '2026-04-17T13:02:00.000Z',
+      }),
+    ];
+    observations[0].sessionId = 'session_old';
+    observations[1].sessionId = 'session_new';
+    const timeline = timelineWithObservations(observations, [], 'session_new');
+
+    const result = await runPlannerRevision({
+      timeline,
+      now,
+      cause: 'session_stop',
+      sessionIdOverride: 'session_old',
+      force: true,
+      windowMs: WINDOW_MS,
+      runReplan: async input => {
+        expect(input.clusters.flatMap(cluster => cluster.sourceObservationIds)).toEqual([
+          'obs_old',
+        ]);
+        return {
+          model: 'stub-model',
+          promptVersion: PLANNER_PROMPT_VERSION,
+          durationMs: 100,
+          blocks: [
+            {
+              startAt: '2026-04-17T13:00:00.000Z',
+              endAt: '2026-04-17T13:01:00.000Z',
+              headline: 'Stopped session repair',
+              narrative: 'Revised only the stopped session.',
+              label: 'worked_on' as const,
+              category: 'coding' as const,
+              confidence: 0.8,
+              keyActivities: [],
+              artifacts: {
+                apps: [],
+                repositories: [],
+                urls: [],
+                tickets: [],
+                documents: [],
+                people: [],
+              },
+              reasonCodes: [],
+              sourceObservationIds: ['obs_old'],
+            },
+          ],
+        };
+      },
+    });
+
+    expect(result.kind).toBe('success');
+    if (result.kind !== 'success') return;
+    expect(result.snapshot.sessionId).toBe('session_old');
+  });
+
   test('emits a task_plan_revision_failed event when the engine throws', async () => {
     const observations = [
       makeObservation({id: 'obs_1', observedAt: '2026-04-17T13:00:00.000Z'}),

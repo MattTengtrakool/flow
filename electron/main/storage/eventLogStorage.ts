@@ -1,8 +1,9 @@
-import {app} from 'electron';
+import { app } from 'electron';
+import { randomUUID } from 'node:crypto';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 
-import type {DomainEvent} from '../../../src/timeline/eventLog';
+import type { DomainEvent } from '../../../src/timeline/eventLog';
 
 export type PersistedEventLogPayload = {
   eventLog: DomainEvent[];
@@ -13,6 +14,8 @@ export type SaveEventLogResult = {
   filePath: string;
   savedAt: string;
 };
+
+let saveEventLogQueue: Promise<void> = Promise.resolve();
 
 export function getEventLogDirectoryPath(): string {
   return path.join(app.getPath('appData'), 'Flow');
@@ -27,7 +30,7 @@ function getPackagedUserDataEventLogFilePath(): string {
 }
 
 async function ensureEventLogDirectoryExists() {
-  await fs.mkdir(getEventLogDirectoryPath(), {recursive: true});
+  await fs.mkdir(getEventLogDirectoryPath(), { recursive: true });
 }
 
 export async function loadEventLog(): Promise<PersistedEventLogPayload> {
@@ -58,10 +61,12 @@ export async function loadEventLog(): Promise<PersistedEventLogPayload> {
           const packagedContents = await fs.readFile(packagedPath, 'utf8');
           const parsed = JSON.parse(packagedContents) as unknown;
           if (!Array.isArray(parsed)) {
-            throw new Error('The Electron event log file does not contain an array.');
+            throw new Error(
+              'The Electron event log file does not contain an array.',
+            );
           }
           await saveEventLog(parsed as DomainEvent[]);
-          return {eventLog: parsed as DomainEvent[], filePath};
+          return { eventLog: parsed as DomainEvent[], filePath };
         } catch (packagedError) {
           if (
             packagedError == null ||
@@ -73,7 +78,7 @@ export async function loadEventLog(): Promise<PersistedEventLogPayload> {
           }
         }
       }
-      return {eventLog: [], filePath};
+      return { eventLog: [], filePath };
     }
     throw error;
   }
@@ -82,13 +87,31 @@ export async function loadEventLog(): Promise<PersistedEventLogPayload> {
 export async function saveEventLog(
   eventLog: DomainEvent[],
 ): Promise<SaveEventLogResult> {
+  const serialized = JSON.stringify(eventLog, null, 2);
+  const saveOperation = saveEventLogQueue.then(() =>
+    writeSerializedEventLog(serialized),
+  );
+  saveEventLogQueue = saveOperation.then(
+    () => undefined,
+    () => undefined,
+  );
+  return saveOperation;
+}
+
+async function writeSerializedEventLog(
+  serialized: string,
+): Promise<SaveEventLogResult> {
   await ensureEventLogDirectoryExists();
   const filePath = getEventLogFilePath();
-  const temporaryPath = `${filePath}.tmp`;
-  const serialized = JSON.stringify(eventLog, null, 2);
+  const temporaryPath = `${filePath}.${randomUUID()}.tmp`;
 
-  await fs.writeFile(temporaryPath, serialized, 'utf8');
-  await fs.rename(temporaryPath, filePath);
+  try {
+    await fs.writeFile(temporaryPath, serialized, 'utf8');
+    await fs.rename(temporaryPath, filePath);
+  } catch (error) {
+    await fs.unlink(temporaryPath).catch(() => {});
+    throw error;
+  }
 
   return {
     filePath,
