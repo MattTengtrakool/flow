@@ -4,7 +4,8 @@ import {
   type DomainEvent,
   type TimelineView,
 } from '../timeline/eventLog';
-import {TASK_ENGINE_VERSION, type TaskReconciliationResult} from './types';
+import { repairTaskTitle } from './title';
+import { TASK_ENGINE_VERSION, type TaskReconciliationResult } from './types';
 
 function mode(values: string[]): string | null {
   if (values.length === 0) {
@@ -16,7 +17,10 @@ function mode(values: string[]): string | null {
     counts.set(value, (counts.get(value) ?? 0) + 1);
   }
 
-  return [...counts.entries()].sort((left, right) => right[1] - left[1])[0]?.[0] ?? null;
+  return (
+    [...counts.entries()].sort((left, right) => right[1] - left[1])[0]?.[0] ??
+    null
+  );
 }
 
 function summarizeClosedLineage(timeline: TimelineView, lineageId: string) {
@@ -36,7 +40,9 @@ function summarizeClosedLineage(timeline: TimelineView, lineageId: string) {
     .map(observation => observation.structured?.summary ?? observation.text)
     .filter(text => text.trim().length > 0)
     .slice(0, 6);
-  const repos = observations.flatMap(observation => observation.structured?.entities.repos ?? []);
+  const repos = observations.flatMap(
+    observation => observation.structured?.entities.repos ?? [],
+  );
   const tickets = observations.flatMap(
     observation => observation.structured?.entities.tickets ?? [],
   );
@@ -46,16 +52,27 @@ function summarizeClosedLineage(timeline: TimelineView, lineageId: string) {
   const commonTicket = mode(tickets);
   const commonRepo = mode(repos);
   const commonDocument = mode(documents);
-  const finalTitle =
+  const rawFinalTitle =
     (commonTicket != null && commonRepo != null
       ? `${commonTicket} in ${commonRepo}`
       : commonTicket != null
-        ? commonTicket
-        : commonDocument != null
-          ? `Work on ${commonDocument}`
-          : lineage?.latestLiveTitle) ??
+      ? commonTicket
+      : commonDocument != null
+      ? commonDocument
+      : lineage?.latestLiveTitle) ??
     timeline.taskSegmentsById[segmentIds[0] ?? '']?.liveTitle ??
     'Completed work';
+  const finalTitle = repairTaskTitle({
+    title: rawFinalTitle,
+    artifacts: {
+      tickets,
+      repositories: repos,
+      documents,
+    },
+    keyActivities: summaries,
+    fallback: 'Completed work',
+    preferAnchors: true,
+  });
   const finalSummary =
     summaries.length > 0
       ? summaries.join(' ')
@@ -66,14 +83,17 @@ function summarizeClosedLineage(timeline: TimelineView, lineageId: string) {
         segment.kind === 'side_branch' &&
         segment.startTime != null &&
         segment.endTime != null &&
-        Date.parse(segment.endTime) - Date.parse(segment.startTime) <= 2 * 60 * 1000,
+        Date.parse(segment.endTime) - Date.parse(segment.startTime) <=
+          2 * 60 * 1000,
     )
     .map(segment => segment.id);
 
-  return {finalTitle, finalSummary, mergedSegmentIds, segmentIds};
+  return { finalTitle, finalSummary, mergedSegmentIds, segmentIds };
 }
 
-export function buildReconciliationEvents(timeline: TimelineView): DomainEvent[] {
+export function buildReconciliationEvents(
+  timeline: TimelineView,
+): DomainEvent[] {
   const now = createOccurredAt();
   const events: DomainEvent[] = [];
 
@@ -86,15 +106,18 @@ export function buildReconciliationEvents(timeline: TimelineView): DomainEvent[]
     const segments = lineage.segmentIds
       .map(segmentId => timeline.taskSegmentsById[segmentId])
       .filter(Boolean);
-    const hasOpenSegment = segments.some(segment =>
-      segment.state === 'open' || segment.state === 'candidate' || segment.state === 'branched',
+    const hasOpenSegment = segments.some(
+      segment =>
+        segment.state === 'open' ||
+        segment.state === 'candidate' ||
+        segment.state === 'branched',
     );
 
     if (hasOpenSegment || segments.length === 0) {
       continue;
     }
 
-    const {finalTitle, finalSummary, mergedSegmentIds, segmentIds} =
+    const { finalTitle, finalSummary, mergedSegmentIds, segmentIds } =
       summarizeClosedLineage(timeline, lineageId);
     const reconciliation: TaskReconciliationResult = {
       id: createDomainId('reconciliation'),
@@ -126,7 +149,8 @@ export function buildReconciliationEvents(timeline: TimelineView): DomainEvent[]
         mergedSegmentIds,
         targetLineageId: lineageId,
         targetSegmentId: segmentIds[0] ?? null,
-        summary: 'Short-lived side branches were absorbed during reconciliation.',
+        summary:
+          'Short-lived side branches were absorbed during reconciliation.',
         actor: 'system',
         engineVersion: TASK_ENGINE_VERSION,
         reconciliationRunId: reconciliation.id,

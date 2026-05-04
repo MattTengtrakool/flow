@@ -12,6 +12,7 @@ import type {
 import {pruneOutlierObservationIds} from './revisionEngine';
 import {mapBlockToWorklogCalendarBlock, type PlanBlock} from './types';
 import type {TaskSegmentView} from '../tasks/types';
+import {repairTaskTitle} from '../tasks/title';
 
 const READ_TIME_BLOCK_BUFFER_MS = 2 * 60 * 1000;
 const COVERAGE_GAP_MS = 3 * 60 * 1000;
@@ -376,8 +377,23 @@ function mapTaskSegmentToWorklogBlock(
         .map(decision => decision.decisionMode),
     ),
   );
-  const title =
+  const rawTitle =
     segment.finalTitle ?? segment.liveTitle ?? observations.at(-1)?.structured?.taskHypothesis ?? 'Working';
+  const observationSummaries = observations
+    .map(observation => observation.structured?.summary ?? observation.text)
+    .filter(value => value.trim().length > 0);
+  const title = repairTaskTitle({
+    title: rawTitle,
+    artifacts: {
+      tickets: segment.entityMemory.ticketIds,
+      repositories: segment.entityMemory.repos,
+      documents: segment.entityMemory.documents,
+      urls: segment.entityMemory.urls,
+    },
+    keyActivities: observationSummaries.slice(-4),
+    fallback: 'Working',
+    preferAnchors: true,
+  });
   const narrative =
     segment.finalSummary ?? segment.liveSummary ?? observations.at(-1)?.text ?? title;
   const category = mode(
@@ -416,10 +432,7 @@ function mapTaskSegmentToWorklogBlock(
     tickets: segment.entityMemory.ticketIds,
     documents: segment.entityMemory.documents,
     reasonCodes,
-    keyActivities: observations
-      .map(observation => observation.structured?.summary ?? observation.text)
-      .filter(value => value.trim().length > 0)
-      .slice(-4),
+    keyActivities: observationSummaries.slice(-4),
     category: category ?? 'other',
     people: segment.entityMemory.people,
     urls: segment.entityMemory.urls,

@@ -30,6 +30,9 @@ import {
   type TaskPlanSnapshot,
 } from './types';
 import type { CalendarContext } from '../calendar/types';
+import { isWellFormedTaskHeadline, repairTaskTitle } from '../tasks/title';
+
+export { isWellFormedTaskHeadline };
 
 export type RunPlannerRevisionArgs = {
   timeline: TimelineView;
@@ -67,7 +70,7 @@ const MIN_BLOCK_DURATION_MS = 60 * 1000;
 export async function runPlannerRevision(
   args: RunPlannerRevisionArgs,
 ): Promise<RunPlannerRevisionResult> {
-  const {timeline} = args;
+  const { timeline } = args;
   const targetSessionId =
     args.sessionIdOverride !== undefined
       ? args.sessionIdOverride
@@ -258,99 +261,22 @@ function repairBlockHeadline(block: PlanBlock): PlanBlock {
   if (isWellFormedTaskHeadline(block.headline)) {
     return block;
   }
-  const synthesized = synthesizeHeadlineFromBlock(block);
-  if (synthesized == null || synthesized === block.headline) {
+  const synthesized = repairTaskTitle({
+    title: block.headline,
+    artifacts: {
+      tickets: block.artifacts.tickets,
+      repositories: block.artifacts.repositories,
+      urls: block.artifacts.urls,
+      documents: block.artifacts.documents,
+    },
+    keyActivities: block.keyActivities,
+    fallback: block.headline,
+    preferAnchors: true,
+  });
+  if (synthesized === block.headline) {
     return block;
   }
   return { ...block, headline: synthesized };
-}
-
-const GERUND_PREFIX_RE =
-  /^(?:reviewing|debugging|configuring|developing|refactoring|implementing|writing|testing|managing|setting|handling|working|investigating|browsing|coding|planning|preparing|updating|fixing|building|checking|reading|monitoring|researching|drafting|deploying|syncing|triaging|analyzing|running|setting up)\b/i;
-const GENERIC_ALONE_RE =
-  /^(?:workflow|workflows|environment|config|configuration|setup|updates|code|changes|work|task|miscellaneous)(?:\s|$)/i;
-const TWO_ACTIVITIES_RE = /^[a-z]+ing\s+(?:&|and)\s+[a-z]+/i;
-
-export function isWellFormedTaskHeadline(headline: string): boolean {
-  const trimmed = headline.trim();
-  if (trimmed.length === 0) return false;
-  if (GERUND_PREFIX_RE.test(trimmed)) return false;
-  if (TWO_ACTIVITIES_RE.test(trimmed)) return false;
-  if (GENERIC_ALONE_RE.test(trimmed)) return false;
-  return true;
-}
-
-function synthesizeHeadlineFromBlock(block: PlanBlock): string | null {
-  const ticket = block.artifacts.tickets[0];
-  if (ticket != null && ticket.length > 0) {
-    const suffix = guessShortTopic(block);
-    return suffix != null ? `${ticket}: ${suffix}` : ticket;
-  }
-
-  const prFromUrl = firstPrNumber(block.artifacts.urls);
-  if (prFromUrl != null) {
-    const suffix = guessShortTopic(block);
-    return suffix != null ? `${suffix} (PR ${prFromUrl})` : `PR ${prFromUrl}`;
-  }
-
-  const distinctiveFile = block.artifacts.documents.find(value =>
-    isBlockDistinctiveFile(value),
-  );
-  if (distinctiveFile != null) {
-    const basename = distinctiveFile.split('/').pop() ?? distinctiveFile;
-    const stem = basename.replace(/\.[a-z0-9]{1,6}$/i, '');
-    const humanStem = humanizeIdentifier(stem);
-    return humanStem.length > 0 ? humanStem : basename;
-  }
-
-  const repo = block.artifacts.repositories[0];
-  if (repo != null && repo.length > 0) {
-    const topic = guessShortTopic(block);
-    return topic != null ? `${repo}: ${topic}` : repo;
-  }
-
-  return null;
-}
-
-function firstPrNumber(urls: string[]): string | null {
-  for (const url of urls) {
-    const match = /\bpull\/(\d{2,7})\b/i.exec(url);
-    if (match != null) return `#${match[1]}`;
-  }
-  return null;
-}
-
-function isBlockDistinctiveFile(path: string): boolean {
-  const basename = path.split('/').pop() ?? path;
-  if (/^package(-lock)?\.json$/i.test(basename)) return false;
-  if (/^(readme|changelog|license)/i.test(basename)) return false;
-  if (!/\.[a-z0-9]{1,6}$/i.test(basename) && !path.includes('/')) return false;
-  return true;
-}
-
-function humanizeIdentifier(value: string): string {
-  // e.g. dedupeAssignmentsByBrand -> "Dedupe assignments by brand"
-  const spaced = value
-    .replace(/[-_]+/g, ' ')
-    .replace(/([a-z0-9])([A-Z])/g, '$1 $2')
-    .replace(/\s+/g, ' ')
-    .trim();
-  if (spaced.length === 0) return value;
-  return spaced.charAt(0).toUpperCase() + spaced.slice(1);
-}
-
-function guessShortTopic(block: PlanBlock): string | null {
-  // Use the first key activity as a short topic, stripped of leading gerunds.
-  const activity = block.keyActivities[0];
-  if (activity == null) return null;
-  const stripped = activity
-    .replace(
-      /^(reviewing|debugging|configuring|developing|refactoring|implementing|writing|testing|managing|setting|handling|working|investigating|browsing|coding|updating|fixing|building|checking|reading|researching|drafting|deploying|syncing|triaging|analyzing|running)\s+/i,
-      '',
-    )
-    .trim();
-  if (stripped.length === 0 || stripped.length > 40) return null;
-  return stripped;
 }
 
 /**

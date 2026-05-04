@@ -4,7 +4,8 @@ import {
   type StructuredObservation,
 } from './types';
 
-export const OBSERVATION_PROMPT_VERSION = '2026-04-13.stage8.v1';
+export const OBSERVATION_PROMPT_VERSION =
+  '2026-05-04.observation-noun-task-hypothesis.v1';
 
 export const STRUCTURED_OBSERVATION_JSON_SCHEMA = {
   type: 'object',

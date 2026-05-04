@@ -6,7 +6,8 @@ import {
   type TaskPendingBufferedEvent,
   type TimelineView,
 } from '../timeline/eventLog';
-import {mergeEntityMemory} from './features';
+import { mergeEntityMemory } from './features';
+import { repairTaskTitle } from './title';
 import {
   TASK_ENGINE_VERSION,
   createEmptyTaskEntityMemory,
@@ -39,22 +40,52 @@ function buildLiveTitle(
   fallback = 'Working',
 ): string {
   const structured = observation.structured;
-  if (structured?.taskHypothesis != null && structured.taskHypothesis.trim().length > 0) {
-    return structured.taskHypothesis.trim();
-  }
-  if (structured?.entities.tickets?.[0] != null && structured.entities.repos?.[0] != null) {
-    return `${structured.entities.tickets[0]} in ${structured.entities.repos[0]}`;
-  }
-  if (structured?.entities.documents?.[0] != null) {
-    return `Working on ${structured.entities.documents[0]}`;
-  }
-  if (structured?.entities.repos?.[0] != null) {
-    return `Working in ${structured.entities.repos[0]}`;
-  }
-  if (structured?.activityType != null) {
-    return `${structured.activityType[0].toUpperCase()}${structured.activityType.slice(1)} work`;
+  if (structured != null) {
+    return repairTaskTitle({
+      title: structured.taskHypothesis,
+      artifacts: {
+        tickets: structured.entities.tickets,
+        repositories: structured.entities.repos,
+        urls: structured.entities.urls,
+        documents: structured.entities.documents,
+      },
+      keyActivities: [
+        structured.summary,
+        ...(structured.nextAction != null ? [structured.nextAction] : []),
+      ],
+      fallback: fallbackTitleForActivity(structured.activityType, fallback),
+      preferAnchors: true,
+    });
   }
   return fallback;
+}
+
+function fallbackTitleForActivity(
+  activityType: string,
+  fallback: string,
+): string {
+  switch (activityType) {
+    case 'coding':
+      return 'Code task';
+    case 'research':
+      return 'Research task';
+    case 'review':
+      return 'Review task';
+    case 'writing':
+      return 'Document task';
+    case 'communication':
+      return 'Communication thread';
+    case 'planning':
+      return 'Planning task';
+    case 'browsing':
+      return 'Browser task';
+    case 'file_management':
+      return 'File management';
+    case 'meeting':
+      return 'Meeting';
+    default:
+      return fallback;
+  }
 }
 
 function buildLiveSummary(observation: ObservationView): string {
@@ -199,7 +230,9 @@ export function buildTaskEventsForDecision(
           lineageId: currentSegment.lineageId,
           segmentId: currentSegment.id,
           title: currentSegment.liveTitle,
-          summary: `${currentSegment.liveSummary} Brief interruption: ${buildLiveSummary(observation)}`,
+          summary: `${
+            currentSegment.liveSummary
+          } Brief interruption: ${buildLiveSummary(observation)}`,
           final: false,
           actor: 'system',
           causedByObservationId: observation.id,
@@ -257,7 +290,10 @@ export function buildTaskEventsForDecision(
         finalSummary: null,
         observationIds: [],
         supportingApps: observation.structured?.entities.apps ?? [],
-        entityMemory: mergeEntityMemory(createEmptyTaskEntityMemory(), observation),
+        entityMemory: mergeEntityMemory(
+          createEmptyTaskEntityMemory(),
+          observation,
+        ),
         interruptionSegments: [],
         confidence: observation.structured?.confidence ?? 0.5,
         provisional: true,
@@ -292,7 +328,8 @@ export function buildTaskEventsForDecision(
     }
 
     case 'resume_lineage': {
-      const lineageId = selectedCandidate.targetLineageId ?? createDomainId('lineage');
+      const lineageId =
+        selectedCandidate.targetLineageId ?? createDomainId('lineage');
       const segmentId = createDomainId('segment');
 
       if (currentSegment != null && currentSegment.endTime == null) {
@@ -319,7 +356,10 @@ export function buildTaskEventsForDecision(
         startTime: observation.observedAt,
         endTime: null,
         lastActiveTime: observation.observedAt,
-        liveTitle: buildLiveTitle(observation, priorLineage?.latestLiveTitle ?? 'Resumed work'),
+        liveTitle: buildLiveTitle(
+          observation,
+          priorLineage?.latestLiveTitle ?? 'Resumed work',
+        ),
         liveSummary: buildLiveSummary(observation),
         finalTitle: null,
         finalSummary: null,
@@ -330,7 +370,8 @@ export function buildTaskEventsForDecision(
           observation,
         ),
         interruptionSegments: [],
-        confidence: observation.structured?.confidence ?? priorLineage?.confidence ?? 0.5,
+        confidence:
+          observation.structured?.confidence ?? priorLineage?.confidence ?? 0.5,
         provisional: true,
         reviewStatus: 'unreviewed',
       };
@@ -390,7 +431,8 @@ export function buildTaskEventsForDecision(
         startTime: existingBranch?.startTime ?? observation.observedAt,
         endTime: existingBranch?.endTime ?? null,
         lastActiveTime: observation.observedAt,
-        liveTitle: existingBranch?.liveTitle ?? buildLiveTitle(observation, 'Side task'),
+        liveTitle:
+          existingBranch?.liveTitle ?? buildLiveTitle(observation, 'Side task'),
         liveSummary:
           existingBranch != null
             ? `${existingBranch.liveSummary} ${buildLiveSummary(observation)}`
@@ -399,14 +441,20 @@ export function buildTaskEventsForDecision(
         finalSummary: null,
         observationIds: existingBranch?.observationIds ?? [],
         supportingApps: Array.from(
-          new Set([...(existingBranch?.supportingApps ?? []), ...(observation.structured?.entities.apps ?? [])]),
+          new Set([
+            ...(existingBranch?.supportingApps ?? []),
+            ...(observation.structured?.entities.apps ?? []),
+          ]),
         ),
         entityMemory: mergeEntityMemory(
           existingBranch?.entityMemory ?? createEmptyTaskEntityMemory(),
           observation,
         ),
         interruptionSegments: existingBranch?.interruptionSegments ?? [],
-        confidence: observation.structured?.confidence ?? existingBranch?.confidence ?? 0.4,
+        confidence:
+          observation.structured?.confidence ??
+          existingBranch?.confidence ??
+          0.4,
         provisional: true,
         reviewStatus: 'needs_attention',
       };
@@ -513,6 +561,10 @@ export function buildTaskEventsForDecision(
 
   return events.map((event, index) => ({
     ...event,
-    sequenceNumber: (timeline.taskDecisionOrder.length + timeline.observationOrder.length + index + 1),
+    sequenceNumber:
+      timeline.taskDecisionOrder.length +
+      timeline.observationOrder.length +
+      index +
+      1,
   }));
 }

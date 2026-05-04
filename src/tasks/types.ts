@@ -1,4 +1,4 @@
-export const TASK_ENGINE_VERSION = '2026-04-15.hybrid-task-v1';
+export const TASK_ENGINE_VERSION = '2026-05-04.hybrid-task-noun-titles.v1';
 
 export type TaskActor = 'system' | 'llm' | 'user';
 

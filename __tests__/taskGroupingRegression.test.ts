@@ -1,10 +1,13 @@
-import {getDayWorklog} from '../src/planner/selectors';
+import { getDayWorklog } from '../src/planner/selectors';
 import {
+  EMPTY_TIMELINE,
   replayEventLog,
   type DomainEvent,
+  type ObservationView,
 } from '../src/timeline/eventLog';
-import type {StructuredObservation} from '../src/observation/types';
-import type {TaskSegmentView} from '../src/tasks/types';
+import type { StructuredObservation } from '../src/observation/types';
+import type { TaskSegmentView } from '../src/tasks/types';
+import { buildTaskEventsForDecision } from '../src/tasks/applyDecision';
 
 const baseObservation: StructuredObservation = {
   summary: 'Worked on Flow capture planning in Cursor.',
@@ -94,6 +97,202 @@ function segment(): TaskSegmentView {
 }
 
 describe('live task grouping regression coverage', () => {
+  test('repairs gerund-heavy observation hypotheses before live titles render', () => {
+    const structured: StructuredObservation = {
+      summary:
+        'User is troubleshooting a Salesforce integration error in Slack related to invalid OAuth scopes.',
+      activityType: 'communication',
+      taskHypothesis:
+        'Troubleshooting a Salesforce integration error by communicating with a colleague via Slack to resolve an OAuth scope issue.',
+      confidence: 0.82,
+      sensitivity: 'low',
+      sensitivityReason: 'Routine engineering support conversation.',
+      artifacts: ['Slack'],
+      entities: {
+        apps: ['Slack'],
+        documents: [],
+        tickets: [],
+        repos: [],
+        urls: [],
+        people: ['Jerry Yu'],
+      },
+      nextAction: 'Ask Jerry Yu to confirm API access.',
+    };
+    const observation: ObservationView = {
+      id: 'obs_oauth',
+      sessionId: 'session_1',
+      text: structured.summary,
+      structured,
+      observedAt: '2026-05-03T17:00:00.000Z',
+    };
+    const selectedCandidate = {
+      decision: 'start_new' as const,
+      targetSegmentId: null,
+      targetLineageId: null,
+      score: 1,
+      reasonCodes: ['no_active_segment'],
+      summary: 'Start a new primary segment.',
+    };
+
+    const events = buildTaskEventsForDecision({
+      timeline: {
+        ...EMPTY_TIMELINE,
+        observationsById: { obs_oauth: observation },
+        observationOrder: ['obs_oauth'],
+        currentSessionId: 'session_1',
+      },
+      observation,
+      selectedCandidate,
+      candidateShortlist: [selectedCandidate],
+      featureSnapshot: null,
+      decisionMode: 'deterministic',
+      usedLlm: false,
+    });
+    const started = events.find(event => event.type === 'task_segment_started');
+
+    expect(started?.type).toBe('task_segment_started');
+    if (started?.type !== 'task_segment_started') return;
+    expect(started.segment.liveTitle).toBe('Salesforce integration error');
+    expect(started.segment.liveTitle).not.toMatch(
+      /^(Troubleshooting|Investigating|Working)\b/i,
+    );
+  });
+
+  test('uses document anchors without adding "Work on" to live titles', () => {
+    const structured: StructuredObservation = {
+      summary: 'Edited Flow CLAUDE.md in Cursor.',
+      activityType: 'writing',
+      taskHypothesis: null,
+      confidence: 0.88,
+      sensitivity: 'low',
+      sensitivityReason: 'Routine project documentation.',
+      artifacts: ['Flow CLAUDE.md'],
+      entities: {
+        apps: ['Cursor'],
+        documents: ['Flow CLAUDE.md'],
+        tickets: [],
+        repos: ['flow'],
+        urls: [],
+        people: [],
+      },
+      nextAction: null,
+    };
+    const observation: ObservationView = {
+      id: 'obs_claude',
+      sessionId: 'session_1',
+      text: structured.summary,
+      structured,
+      observedAt: '2026-05-03T17:02:00.000Z',
+    };
+    const selectedCandidate = {
+      decision: 'start_new' as const,
+      targetSegmentId: null,
+      targetLineageId: null,
+      score: 1,
+      reasonCodes: ['no_active_segment'],
+      summary: 'Start a new primary segment.',
+    };
+
+    const events = buildTaskEventsForDecision({
+      timeline: {
+        ...EMPTY_TIMELINE,
+        observationsById: { obs_claude: observation },
+        observationOrder: ['obs_claude'],
+        currentSessionId: 'session_1',
+      },
+      observation,
+      selectedCandidate,
+      candidateShortlist: [selectedCandidate],
+      featureSnapshot: null,
+      decisionMode: 'deterministic',
+      usedLlm: false,
+    });
+    const started = events.find(event => event.type === 'task_segment_started');
+
+    expect(started?.type).toBe('task_segment_started');
+    if (started?.type !== 'task_segment_started') return;
+    expect(started.segment.liveTitle).toBe('Flow CLAUDE.md');
+  });
+
+  test('repairs old persisted live titles when rendering the worklog', () => {
+    const structured: StructuredObservation = {
+      summary: 'Edited Flow CLAUDE.md in Cursor.',
+      activityType: 'writing',
+      taskHypothesis: null,
+      confidence: 0.88,
+      sensitivity: 'low',
+      sensitivityReason: 'Routine project documentation.',
+      artifacts: ['Flow CLAUDE.md'],
+      entities: {
+        apps: ['Cursor'],
+        documents: ['Flow CLAUDE.md'],
+        tickets: [],
+        repos: ['flow'],
+        urls: [],
+        people: [],
+      },
+      nextAction: null,
+    };
+    const staleSegment = segment();
+    staleSegment.liveTitle = 'Work on Flow CLAUDE.md';
+    staleSegment.liveSummary = structured.summary;
+    staleSegment.entityMemory.documents = ['Flow CLAUDE.md'];
+    staleSegment.entityMemory.repos = ['flow'];
+
+    const timeline = replayEventLog([
+      {
+        id: 'event_session_start',
+        type: 'session_started',
+        sessionId: 'session_1',
+        title: 'Session 1',
+        occurredAt: '2026-05-03T17:00:00.000Z',
+      },
+      captureEvent('capture_1', '2026-05-03T17:00:00.000Z', 'b'.repeat(64)),
+      {
+        id: 'event_obs_1',
+        type: 'observation_added',
+        observationId: 'obs_1',
+        sessionId: 'session_1',
+        text: structured.summary,
+        structured,
+        occurredAt: '2026-05-03T17:00:00.000Z',
+      },
+      {
+        id: 'event_segment_1',
+        type: 'task_segment_started',
+        segment: staleSegment,
+        occurredAt: '2026-05-03T17:00:00.000Z',
+      },
+      {
+        id: 'event_decision_1',
+        type: 'task_decision_recorded',
+        decisionId: 'decision_1',
+        occurredAt: '2026-05-03T17:00:00.000Z',
+        decision: {
+          id: 'decision_1',
+          observationId: 'obs_1',
+          occurredAt: '2026-05-03T17:00:00.000Z',
+          decision: 'start_new',
+          targetSegmentId: 'segment_1',
+          targetLineageId: 'lineage_1',
+          decisionMode: 'deterministic',
+          reasonCodes: ['no_active_segment'],
+          reasonText: 'Started a new segment.',
+          confidence: 1,
+          usedLlm: false,
+          candidateShortlist: [],
+          featureSnapshot: null,
+          stale: false,
+          errorReason: null,
+        },
+      },
+    ]);
+
+    const worklog = getDayWorklog(timeline, '2026-05-03', 'UTC');
+
+    expect(worklog.blocks[0].title).toBe('Flow CLAUDE.md');
+  });
+
   test('replays live task segment events and uses them before planner snapshots', () => {
     const events: DomainEvent[] = [
       {
@@ -142,10 +341,13 @@ describe('live task grouping regression coverage', () => {
           errorReason: null,
         },
       },
-      ...Array.from({length: 10}, (_, index) =>
+      ...Array.from({ length: 10 }, (_, index) =>
         captureEvent(
           `capture_${index + 2}`,
-          new Date(Date.parse('2026-05-03T17:00:00.000Z') + (index + 1) * 2 * 60 * 1000).toISOString(),
+          new Date(
+            Date.parse('2026-05-03T17:00:00.000Z') +
+              (index + 1) * 2 * 60 * 1000,
+          ).toISOString(),
           'a'.repeat(64),
         ),
       ),
@@ -209,7 +411,9 @@ describe('live task grouping regression coverage', () => {
       title: 'Flow capture planning repair',
       repos: ['flow'],
     });
-    expect(Date.parse(worklog.blocks[0].endTime) - Date.parse(worklog.blocks[0].startTime))
-      .toBe(20 * 60 * 1000);
+    expect(
+      Date.parse(worklog.blocks[0].endTime) -
+        Date.parse(worklog.blocks[0].startTime),
+    ).toBe(20 * 60 * 1000);
   });
 });
