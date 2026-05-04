@@ -8,7 +8,9 @@ type RuntimeGlobal = typeof globalThis & {
 
 const configuredKeys: Partial<Record<ApiKeyName, string>> = {};
 
-export function configureApiKeys(keys: Partial<Record<ApiKeyName, string | undefined>>) {
+export function configureApiKeys(
+  keys: Partial<Record<ApiKeyName, string | undefined>>,
+) {
   for (const [name, value] of Object.entries(keys) as Array<
     [ApiKeyName, string | undefined]
   >) {

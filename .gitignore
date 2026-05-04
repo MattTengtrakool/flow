@@ -10,6 +10,7 @@ build/
 .env
 .env.local
 .env.*
+!.env.example
 claude.md
 CLAUDE.md
 
@@ -24,6 +25,7 @@ dist-electron/
 dist-renderer/
 release/
 electron/native-capture/build/
+electron/native-audio/build/
 
 # testing
 /coverage

@@ -1,0 +1,110 @@
+[
+  {
+    "id": "event_demo_session",
+    "type": "session_started",
+    "sessionId": "session_demo",
+    "title": "Demo workday",
+    "occurredAt": "2026-05-01T15:00:00.000Z"
+  },
+  {
+    "id": "event_demo_plan",
+    "type": "task_plan_revised",
+    "snapshot": {
+      "snapshotId": "plan_snapshot_demo",
+      "revisedAt": "2026-05-01T19:00:00.000Z",
+      "windowStartAt": "2026-05-01T15:00:00.000Z",
+      "windowEndAt": "2026-05-01T19:00:00.000Z",
+      "sessionId": "session_demo",
+      "blocks": [
+        {
+          "id": "block_demo_onboarding",
+          "startAt": "2026-05-01T15:05:00.000Z",
+          "endAt": "2026-05-01T16:10:00.000Z",
+          "headline": "First-run setup checklist",
+          "narrative": "Designed the setup flow for API keys, privacy mode, and macOS permissions.",
+          "notes": "- Drafted the **first-run setup checklist**\n- Grouped setup into provider, Accessibility, Screen Recording, and first session\n- Added copy that explains local-first storage without developer jargon",
+          "label": "drafted",
+          "category": "planning",
+          "confidence": 0.9,
+          "keyActivities": [
+            "Drafted setup checklist",
+            "Reviewed permission copy"
+          ],
+          "artifacts": {
+            "apps": ["Cursor"],
+            "repositories": ["flow"],
+            "urls": [],
+            "tickets": ["FLOW-101"],
+            "documents": ["electron/renderer/components/Onboarding.tsx"],
+            "people": []
+          },
+          "reasonCodes": ["setup-ui", "permissions"],
+          "sourceObservationIds": []
+        },
+        {
+          "id": "block_demo_corrections",
+          "startAt": "2026-05-01T16:20:00.000Z",
+          "endAt": "2026-05-01T17:35:00.000Z",
+          "headline": "Work block correction events",
+          "narrative": "Added append-only correction events so users can rename, categorize, and mark blocks as wrong.",
+          "notes": "- Added **user_block_corrected** as an append-only timeline event\n- Applied title and category edits at selector read time\n- Passed correction hints back into planner prompts for future revisions",
+          "label": "worked_on",
+          "category": "coding",
+          "confidence": 0.88,
+          "keyActivities": [
+            "Added correction event",
+            "Updated selectors",
+            "Added tests"
+          ],
+          "artifacts": {
+            "apps": ["Cursor", "Terminal"],
+            "repositories": ["flow"],
+            "urls": [],
+            "tickets": ["FLOW-118"],
+            "documents": [
+              "src/timeline/eventLog.ts",
+              "src/planner/selectors.ts"
+            ],
+            "people": []
+          },
+          "reasonCodes": ["event-log", "selector-overlay"],
+          "sourceObservationIds": []
+        },
+        {
+          "id": "block_demo_status",
+          "startAt": "2026-05-01T17:45:00.000Z",
+          "endAt": "2026-05-01T18:45:00.000Z",
+          "headline": "Trust and status center",
+          "narrative": "Built a status center that makes capture, planner, permissions, provider, and privacy state visible.",
+          "notes": "- Added a persistent **status center** above app screens\n- Surfaced last capture, planner state, permission state, and selected provider\n- Added a sanitized recent-activity list for diagnostics",
+          "label": "worked_on",
+          "category": "coding",
+          "confidence": 0.86,
+          "keyActivities": [
+            "Built status cards",
+            "Added recent activity",
+            "Checked responsive layout"
+          ],
+          "artifacts": {
+            "apps": ["Cursor"],
+            "repositories": ["flow"],
+            "urls": [],
+            "tickets": ["FLOW-124"],
+            "documents": ["electron/renderer/components/StatusCenter.tsx"],
+            "people": []
+          },
+          "reasonCodes": ["status", "trust"],
+          "sourceObservationIds": []
+        }
+      ],
+      "model": "demo",
+      "promptVersion": "2026-04-17.planner.v1",
+      "durationMs": 0,
+      "inputObservationCount": 0,
+      "inputClusterCount": 0,
+      "previousSnapshotId": null,
+      "cause": "manual"
+    },
+    "occurredAt": "2026-05-01T19:00:00.000Z"
+  }
+]

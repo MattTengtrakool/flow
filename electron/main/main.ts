@@ -1,3 +1,5 @@
+import './env';
+
 import {
   app,
   BrowserWindow,
@@ -8,21 +10,52 @@ import {
   screen,
 } from 'electron';
 import path from 'node:path';
-import {pathToFileURL} from 'node:url';
+import { pathToFileURL } from 'node:url';
 
-import {registerAiIpcHandlers} from './ai/aiService';
-import {registerAudioIpcHandlers} from './audio/audioService';
-import {registerCaptureIpcHandlers} from './capture/captureService';
-import {loadEventLog, saveEventLog} from './storage/eventLogStorage';
+import {
+  getAppDataDirectoryPath,
+  getAppDisplayName,
+  getAppProfile,
+  getCompanionWindowTitle,
+} from './appProfile';
+import { registerAiIpcHandlers } from './ai/aiService';
+import { registerAudioIpcHandlers } from './audio/audioService';
+import { registerCaptureIpcHandlers } from './capture/captureService';
+import {
+  calendarService,
+  registerCalendarIpcHandlers,
+} from './calendar/googleCalendarService';
+import { loadEventLog, saveEventLog } from './storage/eventLogStorage';
+import {
+  companionInitialBounds,
+  configureCompanionWindow,
+} from './proactive/companionWindow';
+import {
+  proactiveService,
+  registerProactiveIpcHandlers,
+} from './proactive/proactiveService';
+import {
+  meetingTranscriptionService,
+  registerMeetingIpcHandlers,
+} from './meetings/meetingService';
+import {
+  registerSettingsIpcHandlers,
+  settingsService,
+} from './settings/settingsService';
 import {
   registerTimelineIpcHandlers,
   timelineService,
 } from './timeline/timelineService';
 
 const isDev = process.env.ELECTRON_RENDERER_URL != null || !app.isPackaged;
+app.setName(getAppDisplayName());
+app.setPath('userData', getAppDataDirectoryPath());
+
 let tray: Tray | null = null;
 let mainWindow: BrowserWindow | null = null;
 let companionWindow: BrowserWindow | null = null;
+const FLOW_APP_ICON_PATH = 'brand/flow-icon-512.png';
+const FLOW_TRAY_ICON_PATH = 'brand/generated/flow-menubar@1x.png';
 
 function rendererUrl(): string {
   if (process.env.ELECTRON_RENDERER_URL != null) {
@@ -36,24 +69,17 @@ function rendererUrl(): string {
   ).toString();
 }
 
-function rendererUrlWithMode(mode: string): string {
-  const url = new URL(rendererUrl());
-  url.searchParams.set('mode', mode);
-  return url.toString();
-}
-
 function createMainWindow() {
   if (mainWindow != null && !mainWindow.isDestroyed()) {
     return mainWindow;
   }
-
-  mainWindow = new BrowserWindow({
+  const window = new BrowserWindow({
     width: 1280,
     height: 860,
     minWidth: 960,
     minHeight: 640,
-    title: 'Flow',
-    icon: assetPath('brand/flow-icon-512.png'),
+    title: getAppDisplayName(),
+    icon: assetPath(FLOW_APP_ICON_PATH),
     backgroundColor: '#f7f5f0',
     webPreferences: {
       preload: path.join(__dirname, '../preload/index.js'),
@@ -62,36 +88,35 @@ function createMainWindow() {
       sandbox: false,
     },
   });
-
-  void mainWindow.loadURL(rendererUrl());
-
-  if (isDev) {
-    mainWindow.webContents.openDevTools({mode: 'detach'});
-  }
-
-  mainWindow.on('closed', () => {
-    mainWindow = null;
+  mainWindow = window;
+  window.on('closed', () => {
+    if (mainWindow === window) mainWindow = null;
   });
 
-  return mainWindow;
+  void window.loadURL(rendererUrl());
+
+  if (isDev) {
+    window.webContents.openDevTools({ mode: 'detach' });
+  }
+
+  return window;
 }
 
 function createCompanionWindow() {
-  companionWindow = new BrowserWindow({
-    width: 380,
-    height: 148,
-    minWidth: 340,
-    maxWidth: 420,
-    minHeight: 96,
-    maxHeight: 520,
-    resizable: false,
+  const bounds = companionInitialBounds();
+  const window = new BrowserWindow({
+    ...bounds,
     frame: false,
-    show: false,
-    skipTaskbar: true,
+    transparent: true,
+    resizable: false,
+    minimizable: false,
+    maximizable: false,
     alwaysOnTop: true,
-    title: 'Flow Companion',
-    icon: assetPath('brand/flow-icon-512.png'),
-    backgroundColor: '#f8f7f4',
+    hasShadow: false,
+    skipTaskbar: true,
+    show: false,
+    title: getCompanionWindowTitle(),
+    backgroundColor: '#00000000',
     webPreferences: {
       preload: path.join(__dirname, '../preload/index.js'),
       contextIsolation: true,
@@ -99,22 +124,18 @@ function createCompanionWindow() {
       sandbox: false,
     },
   });
-  companionWindow.setVisibleOnAllWorkspaces(true, {visibleOnFullScreen: true});
-  void companionWindow.loadURL(rendererUrlWithMode('companion'));
-  companionWindow.on('closed', () => {
-    companionWindow = null;
+  companionWindow = window;
+  configureCompanionWindow(window);
+  window.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: false });
+  void window.loadURL(`${rendererUrl()}#/companion`);
+  window.once('ready-to-show', () => {
+    if (settingsService.publicSettings().proactive.companionEnabled) {
+      window.showInactive();
+    }
   });
-}
-
-function positionCompanionWindow(window: BrowserWindow) {
-  const display = screen.getDisplayNearestPoint(screen.getCursorScreenPoint());
-  const bounds = display.workArea;
-  const [width, height] = window.getSize();
-  window.setPosition(
-    Math.round(bounds.x + bounds.width - width - 18),
-    Math.round(bounds.y + bounds.height - height - 18),
-    false,
-  );
+  window.on('closed', () => {
+    if (companionWindow === window) companionWindow = null;
+  });
 }
 
 function assetPath(relativePath: string): string {
@@ -122,22 +143,20 @@ function assetPath(relativePath: string): string {
 }
 
 function createTray() {
-  const image = nativeImage.createFromPath(
-    assetPath('brand/generated/flow-menubar@1x.png'),
-  );
+  const image = nativeImage.createFromPath(assetPath(FLOW_TRAY_ICON_PATH));
   image.setTemplateImage(true);
   tray = new Tray(image);
-  tray.setToolTip('Flow');
+  tray.setToolTip(getAppDisplayName());
   tray.setContextMenu(
     Menu.buildFromTemplate([
-      {
-        label: 'Show Flow',
-        click() {
-          showMainWindow();
-        },
-      },
-      {type: 'separator'},
-      {role: 'quit'},
+          {
+            label: `Show ${getAppDisplayName()}`,
+            click() {
+              showMainWindow();
+            },
+          },
+      { type: 'separator' },
+      { role: 'quit' },
     ]),
   );
 }
@@ -148,11 +167,16 @@ function showMainWindow() {
   window.focus();
 }
 
+function setDockIcon() {
+  if (process.platform !== 'darwin') return;
+  app.dock?.setIcon(nativeImage.createFromPath(assetPath(FLOW_APP_ICON_PATH)));
+}
+
 ipcMain.handle('flow:app:getVersion', () => app.getVersion());
+ipcMain.handle('flow:app:getProfile', () => getAppProfile());
 ipcMain.handle('flow:companion:setVisible', (_event, visible: boolean) => {
   if (companionWindow == null || companionWindow.isDestroyed()) return;
   if (visible) {
-    positionCompanionWindow(companionWindow);
     companionWindow.showInactive();
   } else {
     companionWindow.hide();
@@ -163,8 +187,8 @@ ipcMain.handle('flow:companion:setContentHeight', (_event, height: number) => {
   const display = screen.getDisplayNearestPoint(screen.getCursorScreenPoint());
   const maxHeight = Math.max(120, display.workArea.height - 36);
   const nextHeight = Math.min(Math.max(Math.ceil(height), 96), maxHeight);
-  companionWindow.setContentSize(380, nextHeight, false);
-  positionCompanionWindow(companionWindow);
+  const bounds = companionWindow.getBounds();
+  companionWindow.setBounds({...bounds, height: nextHeight}, false);
 });
 ipcMain.handle('flow:storage:loadEventLog', () => loadEventLog());
 ipcMain.handle('flow:storage:saveEventLog', (_event, eventLog: unknown) => {
@@ -176,10 +200,23 @@ ipcMain.handle('flow:storage:saveEventLog', (_event, eventLog: unknown) => {
 registerCaptureIpcHandlers();
 registerAudioIpcHandlers();
 registerAiIpcHandlers();
+registerCalendarIpcHandlers();
+registerProactiveIpcHandlers();
+registerMeetingIpcHandlers();
+registerSettingsIpcHandlers();
 registerTimelineIpcHandlers();
 
 app.whenReady().then(() => {
-  timelineService.hydrate().catch(() => {});
+  setDockIcon();
+  settingsService
+    .hydrate()
+    .then(() => calendarService.hydrate())
+    .then(() => timelineService.hydrate())
+    .then(() => proactiveService.hydrate())
+    .then(() => meetingTranscriptionService.hydrate())
+    .catch(() => {
+      timelineService.hydrate().catch(() => {});
+    });
   createMainWindow();
   createCompanionWindow();
   createTray();

@@ -1,15 +1,17 @@
-import type {TimelineUiState} from '../types';
+import type { TimelineUiState } from '../types';
 
 export function StatusBanners(props: {
   permissionStatus: string;
   timelineStore: TimelineUiState;
   onRefreshPermissions: () => void;
 }) {
-  const {permissionStatus, timelineStore, onRefreshPermissions} = props;
+  const { permissionStatus, timelineStore, onRefreshPermissions } = props;
   const orphanedSession =
     timelineStore.timeline.currentSessionId != null &&
     !timelineStore.continuousModeState.enabled
-      ? timelineStore.timeline.sessionsById[timelineStore.timeline.currentSessionId]
+      ? timelineStore.timeline.sessionsById[
+          timelineStore.timeline.currentSessionId
+        ]
       : null;
 
   return (
@@ -35,7 +37,8 @@ export function StatusBanners(props: {
                   .requestAccessibilityPrompt()
                   .then(onRefreshPermissions)
                   .catch(() => {});
-              }}>
+              }}
+            >
               Accessibility
             </button>
             <button
@@ -45,7 +48,8 @@ export function StatusBanners(props: {
                   .requestScreenCaptureAccess()
                   .then(onRefreshPermissions)
                   .catch(() => {});
-              }}>
+              }}
+            >
               Screen Recording
             </button>
           </div>
@@ -62,7 +66,8 @@ export function StatusBanners(props: {
             className="button-ghost"
             onClick={() => {
               timelineStore.runPlannerRevisionNow(true).catch(() => {});
-            }}>
+            }}
+          >
             Retry now
           </button>
         </div>
@@ -81,7 +86,8 @@ export function StatusBanners(props: {
               type="button"
               onClick={() => {
                 timelineStore.stopSession().catch(() => {});
-              }}>
+              }}
+            >
               Close
             </button>
           </div>

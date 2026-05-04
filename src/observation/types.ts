@@ -65,4 +65,3 @@ export type ObservationEngineInput = {
   currentContext: ContextSnapshotPayload | null;
   recentObservations: StructuredObservation[];
 };
-

@@ -1,9 +1,9 @@
-import type {ObservationView} from '../timeline/eventLog';
+import type { ObservationView } from '../timeline/eventLog';
 import type {
   ObservationActivityType,
   StructuredObservation,
 } from '../observation/types';
-import type {CondensedObservationEntry} from './types';
+import type { CondensedObservationEntry } from './types';
 
 const DEFAULT_GAP_MS = 3 * 60 * 1000;
 
@@ -42,8 +42,12 @@ export function condenseObservations(
 
   const structured = observations
     .filter(observation => observation.deletedAt == null)
-    .filter((observation): observation is ObservationView & {structured: StructuredObservation} =>
-      observation.structured != null,
+    .filter(
+      (
+        observation,
+      ): observation is ObservationView & {
+        structured: StructuredObservation;
+      } => observation.structured != null,
     )
     .slice()
     .sort((a, b) => a.observedAt.localeCompare(b.observedAt));
@@ -54,7 +58,10 @@ export function condenseObservations(
     const current = drafts[drafts.length - 1];
     const observedMs = Date.parse(observation.observedAt);
 
-    if (current != null && canMerge(current, observation, observedMs, adjacencyGapMs)) {
+    if (
+      current != null &&
+      canMerge(current, observation, observedMs, adjacencyGapMs)
+    ) {
       extendDraft(current, observation, observedMs);
     } else {
       drafts.push(createDraft(observation, observedMs));
@@ -102,11 +109,11 @@ function sampleObservationIds(ids: string[], max: number): string[] {
   return result;
 }
 
-export {sampleObservationIds};
+export { sampleObservationIds };
 
 function canMerge(
   current: ClusterDraft,
-  observation: ObservationView & {structured: StructuredObservation},
+  observation: ObservationView & { structured: StructuredObservation },
   observedMs: number,
   adjacencyGapMs: number,
 ): boolean {
@@ -144,7 +151,7 @@ function canMerge(
 }
 
 function createDraft(
-  observation: ObservationView & {structured: StructuredObservation},
+  observation: ObservationView & { structured: StructuredObservation },
   observedMs: number,
 ): ClusterDraft {
   const summary = observation.structured.summary.trim();
@@ -182,7 +189,7 @@ function createDraft(
 
 function extendDraft(
   draft: ClusterDraft,
-  observation: ObservationView & {structured: StructuredObservation},
+  observation: ObservationView & { structured: StructuredObservation },
   observedMs: number,
 ): void {
   draft.latestAt = observation.observedAt;
@@ -222,7 +229,10 @@ function extendDraft(
   }
 }
 
-function compactDrafts(drafts: ClusterDraft[], maxEntries: number): ClusterDraft[] {
+function compactDrafts(
+  drafts: ClusterDraft[],
+  maxEntries: number,
+): ClusterDraft[] {
   if (drafts.length <= maxEntries) {
     return drafts;
   }
@@ -232,7 +242,8 @@ function compactDrafts(drafts: ClusterDraft[], maxEntries: number): ClusterDraft
     let smallestIndex = 0;
     let smallestCombinedSize = Infinity;
     for (let i = 0; i < working.length - 1; i += 1) {
-      const combined = working[i].occurrenceCount + working[i + 1].occurrenceCount;
+      const combined =
+        working[i].occurrenceCount + working[i + 1].occurrenceCount;
       if (combined < smallestCombinedSize) {
         smallestCombinedSize = combined;
         smallestIndex = i;
@@ -264,7 +275,10 @@ function mergeDrafts(left: ClusterDraft, right: ClusterDraft): ClusterDraft {
     occurrenceCount: left.occurrenceCount + right.occurrenceCount,
     taskHypothesis: left.taskHypothesis ?? right.taskHypothesis,
     activityType: left.activityType,
-    sourceObservationIds: [...left.sourceObservationIds, ...right.sourceObservationIds],
+    sourceObservationIds: [
+      ...left.sourceObservationIds,
+      ...right.sourceObservationIds,
+    ],
     summaries,
     nextActions: new Set([...left.nextActions, ...right.nextActions]),
     apps: new Set([...left.apps, ...right.apps]),

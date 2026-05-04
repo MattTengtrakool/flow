@@ -65,32 +65,32 @@ export const STRUCTURED_OBSERVATION_JSON_SCHEMA = {
         apps: {
           type: 'array',
           maxItems: 6,
-          items: {type: 'string', minLength: 1, maxLength: 120},
+          items: { type: 'string', minLength: 1, maxLength: 120 },
         },
         documents: {
           type: 'array',
           maxItems: 6,
-          items: {type: 'string', minLength: 1, maxLength: 160},
+          items: { type: 'string', minLength: 1, maxLength: 160 },
         },
         tickets: {
           type: 'array',
           maxItems: 6,
-          items: {type: 'string', minLength: 1, maxLength: 80},
+          items: { type: 'string', minLength: 1, maxLength: 80 },
         },
         repos: {
           type: 'array',
           maxItems: 6,
-          items: {type: 'string', minLength: 1, maxLength: 120},
+          items: { type: 'string', minLength: 1, maxLength: 120 },
         },
         urls: {
           type: 'array',
           maxItems: 6,
-          items: {type: 'string', minLength: 1, maxLength: 240},
+          items: { type: 'string', minLength: 1, maxLength: 240 },
         },
         people: {
           type: 'array',
           maxItems: 6,
-          items: {type: 'string', minLength: 1, maxLength: 120},
+          items: { type: 'string', minLength: 1, maxLength: 120 },
         },
       },
     },
@@ -119,7 +119,10 @@ export function isStructuredObservation(
   const candidate = value as Record<string, unknown>;
   const entities = candidate.entities;
 
-  if (typeof candidate.summary !== 'string' || candidate.summary.trim().length === 0) {
+  if (
+    typeof candidate.summary !== 'string' ||
+    candidate.summary.trim().length === 0
+  ) {
     return false;
   }
 
@@ -167,7 +170,10 @@ export function isStructuredObservation(
     return false;
   }
 
-  if (candidate.nextAction !== null && typeof candidate.nextAction !== 'string') {
+  if (
+    candidate.nextAction !== null &&
+    typeof candidate.nextAction !== 'string'
+  ) {
     return false;
   }
 

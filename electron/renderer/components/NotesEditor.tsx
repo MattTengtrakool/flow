@@ -1,4 +1,4 @@
-import {memo, useCallback, useEffect, useRef, useState} from 'react';
+import { memo, useCallback, useEffect, useRef, useState } from 'react';
 import type React from 'react';
 
 type Props = {
@@ -46,7 +46,11 @@ export const NotesEditor = memo(function NotesEditor({
         next.splice(index + 1, 0, '');
         onChange(next.join('\n'));
         setFocusedLine(index + 1);
-      } else if (e.key === 'Backspace' && current[index] === '' && current.length > 1) {
+      } else if (
+        e.key === 'Backspace' &&
+        current[index] === '' &&
+        current.length > 1
+      ) {
         e.preventDefault();
         const next = [...current];
         next.splice(index, 1);
@@ -74,7 +78,8 @@ export const NotesEditor = memo(function NotesEditor({
       className="notion-editor"
       onClick={() => {
         if (focusedLine == null) setFocusedLine(lines.length - 1);
-      }}>
+      }}
+    >
       {lines.map((line, index) =>
         focusedLine === index ? (
           <div key={index} className="notion-block">
@@ -100,7 +105,8 @@ export const NotesEditor = memo(function NotesEditor({
             onClick={e => {
               e.stopPropagation();
               setFocusedLine(index);
-            }}>
+            }}
+          >
             <div className="notion-block__render">
               {line === '' ? (
                 index === 0 && lines.length === 1 ? (
@@ -124,7 +130,7 @@ function autoResize(el: HTMLTextAreaElement) {
   el.style.height = `${el.scrollHeight}px`;
 }
 
-function RenderedLine({text}: {text: string}) {
+function RenderedLine({ text }: { text: string }) {
   const trimmed = text.trim();
   if (trimmed.startsWith('# ')) {
     return <p className="notion-h1">{trimmed.slice(2)}</p>;
@@ -158,7 +164,11 @@ function parseInline(text: string): React.ReactNode {
     if (token.startsWith('**')) {
       parts.push(<strong key={key++}>{token.slice(2, -2)}</strong>);
     } else if (token.startsWith('`')) {
-      parts.push(<code key={key++} className="notion-code">{token.slice(1, -1)}</code>);
+      parts.push(
+        <code key={key++} className="notion-code">
+          {token.slice(1, -1)}
+        </code>,
+      );
     } else {
       parts.push(<em key={key++}>{token.slice(1, -1)}</em>);
     }

@@ -1,6 +1,6 @@
 'use strict';
 
-const {styleText} = require('node:util');
+const { styleText } = require('node:util');
 
 function fail(message) {
   console.error(message);

@@ -3,6 +3,7 @@ import {
   getTaskSegments,
   type ObservationView,
   type TimelineView,
+  type UserBlockCorrectionView,
 } from '../timeline/eventLog';
 import type {
   WorklogCalendarBlock,
@@ -130,7 +131,9 @@ function selectPlanBlocksForDay(
   const blocks = rawBlocks.map(block =>
     cleanBlockOfOutliers(block, timeline.observationsById),
   );
-  return blocks.map(block => mapBlockToWorklogCalendarBlock(block));
+  return blocks.map(block =>
+    applyUserCorrections(mapBlockToWorklogCalendarBlock(block), timeline),
+  );
 }
 
 type SnapshotWindowMs = {startMs: number; endMs: number};
@@ -251,7 +254,7 @@ export function getWorklogForDates(
       cleanBlockOfOutliers(block, timeline.observationsById),
     );
     result[targetDayKey] = blocks.map(block =>
-      mapBlockToWorklogCalendarBlock(block),
+      applyUserCorrections(mapBlockToWorklogCalendarBlock(block), timeline),
     );
   }
   return result;
@@ -289,7 +292,9 @@ export function getAllPlanCalendarBlocks(
   const planBlocks = selected
     .sort((a, b) => a.startAt.localeCompare(b.startAt))
     .map(block => cleanBlockOfOutliers(block, timeline.observationsById))
-    .map(mapBlockToWorklogCalendarBlock);
+    .map(block =>
+      applyUserCorrections(mapBlockToWorklogCalendarBlock(block), timeline),
+    );
 
   return [...taskBlocks, ...planBlocks].sort((a, b) =>
     a.startTime.localeCompare(b.startTime),
@@ -336,6 +341,7 @@ function selectAllTaskBlocks(timeline: TimelineView): WorklogCalendarBlock[] {
     .filter(segment => segment.observationIds.length > 0)
     .map(segment => mapTaskSegmentToWorklogBlock(segment, timeline))
     .filter((block): block is WorklogCalendarBlock => block != null)
+    .map(block => applyUserCorrections(block, timeline))
     .sort((a, b) => a.startTime.localeCompare(b.startTime));
 }
 
@@ -579,4 +585,43 @@ function isIdleAt(timeline: TimelineView, atMs: number): boolean {
     }
   }
   return latest?.isIdle === true;
+}
+
+function applyUserCorrections(
+  block: WorklogCalendarBlock,
+  timeline: TimelineView,
+): WorklogCalendarBlock {
+  const correction = findCorrection(block, timeline.userBlockCorrections);
+  if (correction == null) return block;
+
+  const title = correction.title ?? block.title;
+  const category = correction.category ?? block.category;
+  return {
+    ...block,
+    title,
+    category,
+    summary: {
+      ...block.summary,
+      headline: title,
+    },
+    userCorrection: {
+      title: correction.title,
+      category: correction.category,
+      markedWrong: correction.markedWrong,
+      feedback: correction.feedback,
+      mergeWithBlockId: correction.mergeWithBlockId,
+      splitAt: correction.splitAt,
+      editedAt: correction.editedAt,
+    },
+  };
+}
+
+function findCorrection(
+  block: WorklogCalendarBlock,
+  corrections: Record<string, UserBlockCorrectionView>,
+): UserBlockCorrectionView | null {
+  if (block.notesKey != null && corrections[block.notesKey] != null) {
+    return corrections[block.notesKey];
+  }
+  return corrections[block.id] ?? null;
 }

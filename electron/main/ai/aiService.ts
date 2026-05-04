@@ -1,16 +1,18 @@
-import {ipcMain} from 'electron';
+import { ipcMain } from 'electron';
 
-import {runChatTurn, type RunChatTurnArgs} from '../../../src/chat/runChat';
-
-function withGeminiApiKey<T extends {apiKey?: string}>(args: T): T {
-  return {
-    ...args,
-    apiKey: args.apiKey ?? process.env.GEMINI_API_KEY,
-  };
-}
+import type { RunChatTurnArgs } from '../../../src/chat/runChat';
+import { calendarService } from '../calendar/googleCalendarService';
+import { runManagedChatTurn } from './managedAiClient';
 
 export function registerAiIpcHandlers() {
-  ipcMain.handle('flow:chat:runTurn', (_event, args: RunChatTurnArgs) =>
-    runChatTurn(withGeminiApiKey(args)),
-  );
+  ipcMain.handle('flow:chat:runTurn', (_event, args: RunChatTurnArgs) => {
+    const nextArgs = {
+      ...args,
+      calendarContext: calendarService.getContextForRange(
+        new Date(Date.now() - 120 * 24 * 60 * 60 * 1000).toISOString(),
+        new Date(Date.now() + 120 * 24 * 60 * 60 * 1000).toISOString(),
+      ),
+    };
+    return runManagedChatTurn(nextArgs);
+  });
 }

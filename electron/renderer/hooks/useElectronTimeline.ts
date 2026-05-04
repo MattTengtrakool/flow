@@ -2,7 +2,14 @@ import {useCallback, useEffect, useMemo, useState} from 'react';
 
 import type {AudioRecordingSource} from '../../../src/audio/types';
 import {createEmptyTimeline, type TimelineView} from '../../../src/timeline/eventLog';
-import type {FlowElectronApi, TimelineStatePayload} from '../../shared/flowApi';
+import type {
+  ApiKeyStatus,
+  AiConnectionMode,
+  ApiProvider,
+  FlowElectronApi,
+  FlowSettings,
+  TimelineStatePayload,
+} from '../../shared/flowApi';
 
 type HydrationStatus = 'loading' | 'ready' | 'error';
 
@@ -17,6 +24,7 @@ type StoreState = {
     enabled: boolean;
     currentMode: 'off' | 'capturing' | 'observing' | 'paused' | 'error';
     statusMessage: string;
+    lastCapturedAt: string | null;
     lastObservedAt: string | null;
     lastObservedFrameHash: string | null;
     consecutiveFailureCount: number;
@@ -29,11 +37,30 @@ type StoreState = {
     lastFailureMessage: string | null;
     lastSkippedReason: string | null;
     consecutiveFailureCount: number;
+    status: 'idle' | 'planning' | 'failed';
   };
+  privacyModeEnabled: boolean;
+  aiConnectionMode: AiConnectionMode;
+  selectedProvider: ApiProvider;
+  managedAi: FlowSettings['managedAi'];
+  apiKeyStatus: Record<ApiProvider, ApiKeyStatus>;
+  recentActivity: TimelineStatePayload['recentActivity'];
+  meetingDetection: TimelineStatePayload['meetingDetection'];
+  activeMeetingRecording: TimelineStatePayload['activeMeetingRecording'];
+  meetingTranscriptionStatus: TimelineStatePayload['meetingTranscriptionStatus'];
   audioRuntimeState: TimelineStatePayload['audioRuntimeState'];
   activeMeetingCandidate: TimelineStatePayload['activeMeetingCandidate'];
   audioPermissionStatus: TimelineStatePayload['audioRuntimeState']['permissionStatus'];
   diagnostics: TimelineStatePayload['diagnostics'] | null;
+};
+
+const missingApiKeyStatus: ApiKeyStatus = {
+  configured: false,
+  source: 'missing',
+  encrypted: false,
+  lastValidatedAt: null,
+  validationStatus: 'untested',
+  validationMessage: null,
 };
 
 function initialState(): StoreState {
@@ -48,6 +75,7 @@ function initialState(): StoreState {
       enabled: false,
       currentMode: 'off',
       statusMessage: 'Continuous capture is off.',
+      lastCapturedAt: null,
       lastObservedAt: null,
       lastObservedFrameHash: null,
       consecutiveFailureCount: 0,
@@ -60,7 +88,24 @@ function initialState(): StoreState {
       lastFailureMessage: null,
       lastSkippedReason: null,
       consecutiveFailureCount: 0,
+      status: 'idle',
     },
+    privacyModeEnabled: false,
+    aiConnectionMode: 'managed',
+    selectedProvider: 'gemini',
+    managedAi: {
+      configured: false,
+      endpoint: null,
+      authenticated: false,
+    },
+    apiKeyStatus: {
+      gemini: missingApiKeyStatus,
+      anthropic: missingApiKeyStatus,
+    },
+    recentActivity: [],
+    meetingDetection: null,
+    activeMeetingRecording: null,
+    meetingTranscriptionStatus: 'idle',
     audioRuntimeState: {
       permissionStatus: null,
       activeRecordingId: null,
@@ -83,14 +128,16 @@ function stateFromPayload(payload: TimelineStatePayload): StoreState {
     lastSavedAt: null,
     continuousModeState: {
       enabled: payload.captureEnabled,
-      currentMode:
-        payload.captureEnabled
+      currentMode: payload.privacyModeEnabled
+        ? 'off'
+        : payload.captureEnabled
           ? 'capturing'
           : payload.timeline.currentSessionId != null
             ? 'paused'
             : 'off',
       statusMessage: payload.captureStatusMessage,
-      lastObservedAt: null,
+      lastCapturedAt: payload.lastCapturedAt,
+      lastObservedAt: payload.lastObservedAt,
       lastObservedFrameHash: null,
       consecutiveFailureCount: 0,
     },
@@ -104,7 +151,17 @@ function stateFromPayload(payload: TimelineStatePayload): StoreState {
       lastSkippedReason: payload.plannerRuntimeState.lastSkippedReason,
       consecutiveFailureCount:
         payload.plannerRuntimeState.consecutiveFailureCount,
+      status: payload.plannerStatus,
     },
+    privacyModeEnabled: payload.privacyModeEnabled,
+    aiConnectionMode: payload.aiConnectionMode,
+    selectedProvider: payload.selectedProvider,
+    managedAi: payload.managedAi,
+    apiKeyStatus: payload.apiKeyStatus,
+    recentActivity: payload.recentActivity,
+    meetingDetection: payload.meetingDetection,
+    activeMeetingRecording: payload.activeMeetingRecording,
+    meetingTranscriptionStatus: payload.meetingTranscriptionStatus,
     audioRuntimeState: payload.audioRuntimeState,
     activeMeetingCandidate: payload.activeMeetingCandidate,
     audioPermissionStatus: payload.audioRuntimeState.permissionStatus,

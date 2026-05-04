@@ -24,11 +24,13 @@ pnpm format                   # Prettier write
 ```
 
 Run a single test file:
+
 ```bash
 pnpm test __tests__/eventLog.test.ts
 ```
 
 **Required env vars** (set before running):
+
 - `GEMINI_API_KEY` — used by the observation engine and default planner provider
 - `ANTHROPIC_API_KEY` — used by the Anthropic planner provider
 
@@ -36,12 +38,12 @@ pnpm test __tests__/eventLog.test.ts
 
 ### Process boundary
 
-| Process | Entry point | Role |
-|---|---|---|
-| Native helper | `electron/native-capture/FlowNativeCapture.mm` | ScreenCaptureKit capture, Vision OCR, hashing |
-| Electron main | `electron/main/main.ts` | IPC registration, tray, window, storage |
-| Electron preload | `electron/preload/index.ts` | Bridges `window.flow` API via `contextBridge` |
-| Electron renderer | `electron/renderer/` | React DOM app (Vite, port 5173 in dev) |
+| Process           | Entry point                                    | Role                                          |
+| ----------------- | ---------------------------------------------- | --------------------------------------------- |
+| Native helper     | `electron/native-capture/FlowNativeCapture.mm` | ScreenCaptureKit capture, Vision OCR, hashing |
+| Electron main     | `electron/main/main.ts`                        | IPC registration, tray, window, storage       |
+| Electron preload  | `electron/preload/index.ts`                    | Bridges `window.flow` API via `contextBridge` |
+| Electron renderer | `electron/renderer/`                           | React DOM app (Vite, port 5173 in dev)        |
 
 The renderer never imports Node or Electron APIs directly — it calls `window.flow.*` (typed as `FlowElectronApi` in `electron/shared/flowApi.ts`).
 
@@ -56,6 +58,7 @@ The event log is the single source of persistence. It is an append-only array of
 ### Timeline service (`electron/main/timeline/timelineService.ts`)
 
 `ElectronTimelineService` is the central coordinator in the main process. It owns:
+
 - Hydration from disk
 - Continuous capture timer (1 s interval while a session is active)
 - Observation generation (calls Gemini, skips duplicate frames by hash)

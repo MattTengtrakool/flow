@@ -3,8 +3,8 @@
 ## Local Build
 
 ```bash
-pnpm test
 pnpm native-capture:build
+pnpm check
 pnpm electron:build
 pnpm electron:dist
 ```

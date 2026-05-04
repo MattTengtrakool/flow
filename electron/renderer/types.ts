@@ -4,16 +4,37 @@ import type {
   AudioRecordingRuntimeState,
   AudioRecordingSource,
 } from '../../src/audio/types';
+import type {ExternalCalendarEventView} from '../../src/calendar/types';
 import type {CostSummary} from '../../src/planner/costSummary';
 import type {PlannerRevisionCause} from '../../src/planner/types';
 import type {MeetingCandidateView} from '../../src/meeting/types';
 import type {TimelineDiagnosticsReport} from '../../src/timeline/diagnostics';
 import type {TimelineView} from '../../src/timeline/eventLog';
 import type {WorklogCalendarBlock} from '../../src/worklog/types';
+import type {
+  ApiKeyStatus,
+  AiConnectionMode,
+  ApiProvider,
+  FlowSettings,
+  TimelineStatePayload,
+} from '../shared/flowApi';
 export type {CalendarView} from './dateUtils';
-import type {CalendarView} from './dateUtils';
 
 export type NavKey = 'today' | 'calendar' | 'chat' | 'insights' | 'settings';
+
+export type CalendarDisplayItemView =
+  | {
+      kind: 'observed_block';
+      id: string;
+      dateIso: string;
+      block: WorklogCalendarBlock;
+    }
+  | {
+      kind: 'scheduled_event' | 'context_event';
+      id: string;
+      dateIso: string;
+      event: ExternalCalendarEventView;
+    };
 
 export type TimelineUiState = {
   eventLogLength: number;
@@ -26,6 +47,7 @@ export type TimelineUiState = {
     enabled: boolean;
     currentMode: 'off' | 'capturing' | 'observing' | 'paused' | 'error';
     statusMessage: string;
+    lastCapturedAt: string | null;
     lastObservedAt: string | null;
     lastObservedFrameHash: string | null;
     consecutiveFailureCount: number;
@@ -38,7 +60,17 @@ export type TimelineUiState = {
     lastFailureMessage: string | null;
     lastSkippedReason: string | null;
     consecutiveFailureCount: number;
+    status: 'idle' | 'planning' | 'failed';
   };
+  privacyModeEnabled: boolean;
+  aiConnectionMode: AiConnectionMode;
+  selectedProvider: ApiProvider;
+  managedAi: FlowSettings['managedAi'];
+  apiKeyStatus: Record<ApiProvider, ApiKeyStatus>;
+  recentActivity: TimelineStatePayload['recentActivity'];
+  meetingDetection: TimelineStatePayload['meetingDetection'];
+  activeMeetingRecording: TimelineStatePayload['activeMeetingRecording'];
+  meetingTranscriptionStatus: TimelineStatePayload['meetingTranscriptionStatus'];
   audioRuntimeState: AudioRecordingRuntimeState;
   activeMeetingCandidate: MeetingCandidateView | null;
   audioPermissionStatus: AudioPermissionStatus | null;
@@ -59,36 +91,20 @@ export type TimelineUiState = {
   stopSession: () => Promise<void>;
 };
 
-export type SelectionState = {
-  selectedDateIso: string;
-  selectedBlockId: string | null;
-  selectedBlock: WorklogCalendarBlock | null;
-};
-
 export type ChatState = {
   messages: ChatMessage[];
   loading: boolean;
   draft: string;
-  setDraft: (value: string) => void;
-  send: () => Promise<void>;
 };
 
-export type CalendarState = {
-  view: CalendarView;
-  anchorIso: string;
-  visibleDateIsos: string[];
+export type CalendarScreenModel = {
   blocksByDate: Record<string, WorklogCalendarBlock[]>;
   selectedDateIso: string;
-  selectedBlockId: string | null;
-  setView: (view: CalendarView) => void;
-  selectDate: (dateIso: string) => void;
-  selectBlock: (blockId: string) => void;
-  shift: (delta: number) => void;
-  goToToday: () => void;
+  selectedBlock: WorklogCalendarBlock | null;
+  selectedFocusedMinutes: number;
 };
 
-export type AppMetrics = {
+export type InsightsModel = {
   allBlocks: WorklogCalendarBlock[];
   costSummary: CostSummary;
-  timezone: string;
 };

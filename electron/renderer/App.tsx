@@ -1,30 +1,24 @@
-import {useCallback, useEffect, useMemo, useState} from 'react';
+import { useCallback, useState } from 'react';
 
 import '../shared/flowApi';
 import type {
   CalendarItemUpdate,
   CreateCalendarItemInput,
 } from '../../src/calendar/types';
-import {
-  getAllCalendarItemBlocks,
-  getCalendarItemBlocksForDates,
-} from '../../src/calendar/selectors';
-import type {ChatMessage} from '../../src/chat/runChat';
-import {computeCostSummary} from '../../src/planner/costSummary';
-import {getAllPlanCalendarBlocks, getWorklogForDates} from '../../src/planner/selectors';
-import {computeBlockNotesKey} from '../../src/planner/types';
-import type {WorklogCalendarBlock} from '../../src/worklog/types';
-import {AppShell} from './components/AppShell';
-import {CompanionWindow} from './components/CompanionWindow';
-import {StatusBanners} from './components/StatusBanner';
-import {
-  addDaysIso,
-  addMonthsIso,
-  dateRangeForView,
-  focusedMinutes,
-  toDateIso,
-} from './dateUtils';
-import {useElectronTimeline} from './hooks/useElectronTimeline';
+import { AppShell } from './components/AppShell';
+import { CompanionApp } from './components/Companion';
+import { LoadingScreen } from './components/LoadingScreen';
+import { Onboarding } from './components/Onboarding';
+import { PreviewMode } from './components/PreviewMode';
+import { StatusBanners } from './components/StatusBanner';
+import { StatusCenter } from './components/StatusCenter';
+import { useAppStatus } from './hooks/useAppStatus';
+import { useChatSession } from './hooks/useChatSession';
+import { useCalendarState } from './hooks/useCalendarState';
+import { useElectronTimeline } from './hooks/useElectronTimeline';
+import { useFlowSettings } from './hooks/useFlowSettings';
+import { useTimelineCommands } from './hooks/useTimelineCommands';
+import { useWorklogState } from './hooks/useWorklogState';
 import {
   CalendarScreen,
   ChatScreen,
@@ -32,351 +26,157 @@ import {
   SettingsScreen,
   TodayScreen,
 } from './screens';
-import type {CalendarView, NavKey} from './types';
-
-function mergeBlockLists(
-  first: WorklogCalendarBlock[],
-  second: WorklogCalendarBlock[],
-): WorklogCalendarBlock[] {
-  return [...first, ...second].sort((a, b) =>
-    a.startTime.localeCompare(b.startTime),
-  );
-}
-
-function mergeBlocksByDate(
-  dateIsos: string[],
-  first: Record<string, WorklogCalendarBlock[]>,
-  second: Record<string, WorklogCalendarBlock[]>,
-): Record<string, WorklogCalendarBlock[]> {
-  const result: Record<string, WorklogCalendarBlock[]> = {};
-  for (const dateIso of dateIsos) {
-    result[dateIso] = mergeBlockLists(first[dateIso] ?? [], second[dateIso] ?? []);
-  }
-  return result;
-}
+import type { NavKey } from './types';
+import type { FlowElectronApi } from '../shared/flowApi';
 
 export function ElectronApp() {
-  const timelineStore = useElectronTimeline(window.flow);
-  const isCompanionMode = useMemo(
-    () => new URLSearchParams(window.location.search).get('mode') === 'companion',
-    [],
-  );
+  if (window.location.hash === '#/companion') {
+    return <CompanionApp flow={window.flow} />;
+  }
+  if (window.flow == null) {
+    return <PreviewMode />;
+  }
+  return <ElectronAppWithBridge flow={window.flow} />;
+}
+
+function ElectronAppWithBridge(props: { flow: FlowElectronApi }) {
+  const { flow } = props;
+  const timelineStore = useElectronTimeline(flow);
   const [activeNav, setActiveNav] = useState<NavKey>('calendar');
-  const [version, setVersion] = useState<string>('loading');
-  const [permissionStatus, setPermissionStatus] = useState<string>('loading');
-  const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
-  const [chatLoading, setChatLoading] = useState(false);
-  const [chatDraft, setChatDraft] = useState('');
-  const [selectedDateIso, setSelectedDateIso] = useState(() => toDateIso(new Date()));
-  const [selectedBlockId, setSelectedBlockId] = useState<string | null>(null);
-  const [calendarView, setCalendarView] = useState<CalendarView>('month');
-  const [calendarAnchorIso, setCalendarAnchorIso] = useState(() => toDateIso(new Date()));
-
-  const checkPermissions = useCallback(() => {
-    window.flow?.capture
-      .getPermissionsStatus()
-      .then(payload =>
-        setPermissionStatus(
-          `accessibility=${payload.accessibilityTrusted ? 'granted' : 'missing'}, screen=${payload.captureAccessGranted ? 'granted' : 'missing'}`,
-        ),
-      )
-      .catch(() => setPermissionStatus('unavailable'));
-  }, []);
-
-  useEffect(() => {
-    window.flow?.app.getVersion().then(setVersion).catch(() => setVersion('unavailable'));
-    checkPermissions();
-    // Re-check when the window regains focus — accessibility requires the user to
-    // leave to System Settings and come back before the grant is visible.
-    window.addEventListener('focus', checkPermissions);
-    return () => window.removeEventListener('focus', checkPermissions);
-  }, [checkPermissions]);
-
-  const todayIso = toDateIso(new Date());
-  const visibleDateIsos = useMemo(
-    () => dateRangeForView(calendarView, calendarAnchorIso),
-    [calendarView, calendarAnchorIso],
+  const { version, permissions, permissionStatus, checkPermissions } =
+    useAppStatus(flow);
+  const settingsController = useFlowSettings(flow);
+  const calendarState = useCalendarState(flow);
+  const timeline = timelineStore.timeline;
+  const worklog = useWorklogState({
+    activeNav,
+    calendarAnnotations: calendarState.annotations,
+    calendarEvents: calendarState.events,
+    calendarSources: calendarState.sources,
+    timeline,
+    updateEventAnnotation: calendarState.updateEventAnnotation,
+    updateEventBlockLink: calendarState.updateEventBlockLink,
+  });
+  const handleCreateCalendarItem = useCallback(
+    async (input: CreateCalendarItemInput) => {
+      await flow.timeline.createCalendarItem(input);
+    },
+    [flow],
   );
-  const timezone = useMemo(
-    () => Intl.DateTimeFormat().resolvedOptions().timeZone ?? 'UTC',
-    [],
-  );
-
-  // Task blocks use live task segments plus stable-screen capture coverage, so
-  // selector inputs include plan, task, observation, and capture changes.
-  const planSnapshotsLength = timelineStore.timeline.planSnapshots.length;
-  const taskSegmentLength = timelineStore.timeline.taskSegmentOrder.length;
-  const observationLength = timelineStore.timeline.observationOrder.length;
-  const captureLength = timelineStore.timeline.captureRecordOrder.length;
-  const calendarItemsVersion = useMemo(
-    () =>
-      timelineStore.timeline.calendarItemOrder
-        .map(id => {
-          const item = timelineStore.timeline.calendarItemsById[id];
-          return `${id}:${item?.updatedAt ?? ''}:${item?.deletedAt ?? ''}`;
-        })
-        .join('|'),
-    [timelineStore.timeline.calendarItemOrder, timelineStore.timeline.calendarItemsById],
-  );
-
-  const planBlocksByDate = useMemo(
-    () => getWorklogForDates(timelineStore.timeline, visibleDateIsos, timezone),
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [
-      planSnapshotsLength,
-      taskSegmentLength,
-      observationLength,
-      captureLength,
-      visibleDateIsos,
-      timezone,
-    ],
-  );
-  const calendarBlocksByDate = useMemo(
-    () =>
-      getCalendarItemBlocksForDates(
-        timelineStore.timeline,
-        visibleDateIsos,
-        timezone,
-      ),
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [calendarItemsVersion, visibleDateIsos, timezone],
-  );
-  const blocksByDate = useMemo(
-    () => mergeBlocksByDate(visibleDateIsos, planBlocksByDate, calendarBlocksByDate),
-    [calendarBlocksByDate, planBlocksByDate, visibleDateIsos],
-  );
-  const allBlocks = useMemo(
-    () =>
-      mergeBlockLists(
-        getAllPlanCalendarBlocks(timelineStore.timeline),
-        getAllCalendarItemBlocks(timelineStore.timeline, timezone),
-      ),
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [
-      planSnapshotsLength,
-      taskSegmentLength,
-      observationLength,
-      captureLength,
-      calendarItemsVersion,
-      timezone,
-    ],
-  );
-  const costSummary = useMemo(
-    () => computeCostSummary(timelineStore.timeline),
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [planSnapshotsLength],
-  );
-
-  const selectedDayBlocks = blocksByDate[selectedDateIso] ?? [];
-  const selectedFocusedMinutes = focusedMinutes(selectedDayBlocks);
-  const selectedBlock =
-    allBlocks.find(block => block.id === selectedBlockId) ??
-    selectedDayBlocks[0] ??
-    null;
-  const selectedObservationIds = useMemo(
-    () => selectedBlock?.summary.provenance.supportedByObservationIds ?? [],
-    [selectedBlock],
-  );
-  const selectedNotesKey = computeBlockNotesKey(selectedObservationIds);
-  const editableNotesKey =
-    selectedNotesKey.length > 0
-      ? selectedNotesKey
-      : selectedBlock != null
-        ? `block:${selectedBlock.id}`
-        : '';
-  const selectedUserNotes =
-    editableNotesKey.length > 0
-      ? timelineStore.timeline.userBlockNotes[editableNotesKey]?.notes
-      : undefined;
-
-  const goToToday = useCallback(() => {
-    setCalendarAnchorIso(todayIso);
-    setSelectedDateIso(todayIso);
-  }, [todayIso]);
-
-  const shiftCalendar = useCallback((delta: number) => {
-    setCalendarAnchorIso(prev => {
-      const next =
-        calendarView === 'month'
-          ? addMonthsIso(prev, delta)
-          : addDaysIso(prev, delta * (calendarView === 'week' ? 7 : 1));
-      setSelectedDateIso(next);
-      return next;
-    });
-  }, [calendarView]);
-
-  const selectBlockForDate = useCallback((blockId: string, dateIso?: string) => {
-    if (dateIso != null) setSelectedDateIso(dateIso);
-    setSelectedBlockId(blockId);
-  }, []);
-
-  const handleCaptureNow = useCallback(() => {
-    timelineStore.runCaptureNow().catch(() => {});
-  }, [timelineStore]);
-
-  const handleReplanNow = useCallback(() => {
-    timelineStore.runPlannerRevisionNow(true).catch(() => {});
-  }, [timelineStore]);
-
-  const handleEditNotes = useCallback((notes: string) => {
-    if (editableNotesKey.length === 0 || selectedBlock == null) return;
-    window.flow?.timeline.editBlockNotes({
-      notesKey: editableNotesKey,
-      blockId: selectedBlock.id,
-      notes,
-    });
-  }, [editableNotesKey, selectedBlock]);
-
-  const handleCreateCalendarItem = useCallback(async (input: CreateCalendarItemInput) => {
-    await window.flow?.timeline.createCalendarItem(input);
-  }, []);
-
   const handleUpdateCalendarItem = useCallback(
     async (itemId: string, updates: CalendarItemUpdate) => {
-      await window.flow?.timeline.updateCalendarItem({itemId, updates});
+      await flow.timeline.updateCalendarItem({itemId, updates});
     },
-    [],
+    [flow],
+  );
+  const handleDeleteCalendarItem = useCallback(
+    async (itemId: string) => {
+      await flow.timeline.deleteCalendarItem(itemId);
+    },
+    [flow],
   );
 
-  const handleDeleteCalendarItem = useCallback(async (itemId: string) => {
-    await window.flow?.timeline.deleteCalendarItem(itemId);
-    if (selectedBlock?.calendarItemId === itemId) {
-      setSelectedBlockId(null);
-    }
-  }, [selectedBlock]);
+  const chat = useChatSession({
+    flow,
+    timeline,
+    timezone: worklog.timezone,
+    selectedDateIso: worklog.selectedDateIso,
+    selectedBlock: worklog.selectedBlock,
+    selectedCalendarEvent: worklog.selectedExternalEvent,
+    selectedCalendarEventAnnotation: worklog.selectedExternalEventAnnotation,
+    selectedCalendarEventSource: worklog.selectedExternalEventSource,
+  });
+  const timelineCommands = useTimelineCommands(timelineStore);
 
-  const handleSelectTodayBlock = useCallback((block: {id: string}) => {
-    selectBlockForDate(block.id, todayIso);
-  }, [selectBlockForDate, todayIso]);
+  if (settingsController.status === 'loading') {
+    return <LoadingScreen />;
+  }
 
-  const handleSelectCalendarBlock = useCallback((block: {id: string}, dateIso?: string) => {
-    selectBlockForDate(block.id, dateIso);
-  }, [selectBlockForDate]);
+  const setupIncomplete =
+    !settingsController.settings.onboardingCompleted ||
+    !settingsController.settings.managedAi.configured;
 
-  const handleSelectInsightsBlock = useCallback((block: {id: string}) => {
-    selectBlockForDate(block.id);
-  }, [selectBlockForDate]);
-
-  const handleChangeCalendarView = useCallback((view: CalendarView) => {
-    setCalendarView(view);
-    setCalendarAnchorIso(selectedDateIso);
-  }, [selectedDateIso]);
-
-  const handleSelectDate = useCallback((dateIso: string) => {
-    setSelectedDateIso(dateIso);
-    setCalendarAnchorIso(dateIso);
-  }, []);
-
-  const sendChat = useCallback(async () => {
-    const content = chatDraft.trim();
-    if (content.length === 0) return;
-    const conversation = chatMessages;
-    const userMessage: ChatMessage = {
-      id: `chat_${Date.now()}_user`,
-      role: 'user',
-      content,
-      createdAt: new Date().toISOString(),
-    };
-    setChatMessages(previous => [...previous, userMessage]);
-    setChatDraft('');
-    setChatLoading(true);
-    try {
-      if (window.flow == null) {
-        throw new Error('Electron bridge missing.');
-      }
-      const result = await window.flow.chat.runTurn({
-        conversation,
-        userMessage: content,
-        timeline: timelineStore.timeline,
-        timezone,
-      });
-      setChatMessages(previous => [...previous, result.assistantMessage]);
-    } catch (error) {
-      setChatMessages(previous => [
-        ...previous,
-        {
-          id: `chat_${Date.now()}_error`,
-          role: 'assistant',
-          content:
-            error instanceof Error ? error.message : 'Chat request failed.',
-          createdAt: new Date().toISOString(),
-        },
-      ]);
-    } finally {
-      setChatLoading(false);
-    }
-  }, [chatDraft, chatMessages, timelineStore.timeline, timezone]);
-
-  const detailProps = useMemo(() => ({
-    selectedBlock,
-    selectedUserNotes,
-    editableNotesKey,
-    selectedObservationIds,
-    visible: activeNav === 'today' || activeNav === 'calendar',
-    onEditNotes: handleEditNotes,
-  }), [
-    selectedBlock,
-    selectedUserNotes,
-    editableNotesKey,
-    selectedObservationIds,
-    activeNav,
-    handleEditNotes,
-  ]);
+  if (setupIncomplete) {
+    return (
+      <Onboarding
+        permissions={permissions}
+        permissionStatus={permissionStatus}
+        settingsController={settingsController}
+        onRefreshPermissions={checkPermissions}
+        onRequestAccessibility={() => flow.capture.requestAccessibilityPrompt()}
+        onRequestScreen={() => flow.capture.requestScreenCaptureAccess()}
+        onStartSession={timelineStore.startSession}
+      />
+    );
+  }
 
   function activeScreen() {
     switch (activeNav) {
       case 'today':
         return (
           <TodayScreen
-            todayIso={todayIso}
-            blocks={blocksByDate[todayIso] ?? []}
-            selectedBlockId={selectedBlock?.id ?? null}
+            todayIso={worklog.todayIso}
+            blocks={worklog.blocksByDate[worklog.todayIso] ?? []}
+            selectedBlockId={worklog.selectedBlock?.id ?? null}
             captureStatus={timelineStore.continuousModeState.statusMessage}
-            onSelectBlock={handleSelectTodayBlock}
+            onSelectBlock={worklog.selectTodayBlock}
             onStartSession={timelineStore.startSession}
-            onCaptureNow={handleCaptureNow}
-            onReplanNow={handleReplanNow}
+            onCaptureNow={timelineCommands.captureNow}
+            onReplanNow={timelineCommands.replanNow}
           />
         );
       case 'calendar':
         return (
           <CalendarScreen
-            view={calendarView}
-            anchorIso={calendarAnchorIso}
-            visibleDateIsos={visibleDateIsos}
-            blocksByDate={blocksByDate}
-            selectedDateIso={selectedDateIso}
-            selectedBlockId={selectedBlock?.id ?? null}
-            selectedBlock={selectedBlock}
-            selectedDayBlocks={selectedDayBlocks}
-            selectedFocusedMinutes={selectedFocusedMinutes}
-            onChangeView={handleChangeCalendarView}
-            onShift={shiftCalendar}
-            onToday={goToToday}
-            onSelectDate={handleSelectDate}
-            onSelectBlock={handleSelectCalendarBlock}
+            view={worklog.calendarView}
+            anchorIso={worklog.calendarAnchorIso}
+            visibleDateIsos={worklog.visibleDateIsos}
+            blocksByDate={worklog.blocksByDate}
+            selectedDateIso={worklog.selectedDateIso}
+            selectedBlockId={worklog.selectedBlock?.id ?? null}
+            selectedBlock={worklog.selectedBlock}
+            selectedExternalEventId={worklog.selectedExternalEvent?.id ?? null}
+            selectedDayBlocks={worklog.selectedDayBlocks}
+            selectedFocusedMinutes={worklog.selectedFocusedMinutes}
+            externalEventsByDate={worklog.externalEventsByDate}
+            calendarSources={calendarState.sources}
+            reconciliation={worklog.calendarReconciliation}
+            taskFitSuggestions={worklog.taskFitSuggestions}
+            onChangeView={worklog.setCalendarView}
+            onShift={worklog.shiftCalendar}
+            onToday={worklog.goToToday}
+            onSelectDate={worklog.selectDate}
+            onSelectBlock={worklog.selectCalendarBlock}
             onCreateCalendarItem={handleCreateCalendarItem}
             onUpdateCalendarItem={handleUpdateCalendarItem}
             onDeleteCalendarItem={handleDeleteCalendarItem}
+            onSelectExternalEvent={worklog.selectExternalEvent}
           />
         );
       case 'chat':
         return (
           <ChatScreen
-            messages={chatMessages}
-            loading={chatLoading}
-            draft={chatDraft}
-            onDraftChange={setChatDraft}
-            onSend={sendChat}
+            messages={chat.messages}
+            loading={chat.loading}
+            draft={chat.draft}
+            allBlocks={worklog.allBlocks}
+            selectedBlock={worklog.selectedBlock}
+            selectedDateIso={worklog.selectedDateIso}
+            onDraftChange={chat.setDraft}
+            onSend={chat.send}
+            onSelectCitation={block => {
+              worklog.selectInsightsBlock(block);
+              setActiveNav('calendar');
+            }}
           />
         );
       case 'insights':
         return (
           <InsightsScreen
-            allBlocks={allBlocks}
-            costSummary={costSummary}
-            selectedBlockId={selectedBlock?.id ?? null}
-            onSelectBlock={handleSelectInsightsBlock}
+            allBlocks={worklog.allBlocks}
+            costSummary={worklog.costSummary}
+            selectedBlockId={worklog.selectedBlock?.id ?? null}
+            onSelectBlock={worklog.selectInsightsBlock}
           />
         );
       case 'settings':
@@ -385,16 +185,14 @@ export function ElectronApp() {
             version={version}
             permissionStatus={permissionStatus}
             timelineStore={timelineStore}
-            costSummary={costSummary}
-            onCaptureNow={handleCaptureNow}
-            onReplanNow={handleReplanNow}
+            costSummary={worklog.costSummary}
+            settingsController={settingsController}
+            calendarState={calendarState}
+            onCaptureNow={timelineCommands.captureNow}
+            onReplanNow={timelineCommands.replanNow}
           />
         );
     }
-  }
-
-  if (isCompanionMode) {
-    return <CompanionWindow timelineStore={timelineStore} />;
   }
 
   return (
@@ -402,11 +200,18 @@ export function ElectronApp() {
       activeNav={activeNav}
       onNavigate={setActiveNav}
       timelineStore={timelineStore}
-      detail={detailProps}>
+      detail={worklog.detailProps}
+    >
       <StatusBanners
         permissionStatus={permissionStatus}
         timelineStore={timelineStore}
         onRefreshPermissions={checkPermissions}
+      />
+      <StatusCenter
+        settings={settingsController.settings}
+        calendarState={calendarState}
+        permissionStatus={permissionStatus}
+        timelineStore={timelineStore}
       />
       {activeScreen()}
     </AppShell>

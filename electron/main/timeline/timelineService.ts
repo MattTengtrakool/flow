@@ -19,6 +19,7 @@ import {buildOrphanedAudioRecordingRepairEvent} from '../../../src/audio/orphanR
 import {detectMeetingCandidate} from '../../../src/meeting/detector';
 import type {MeetingCandidateView} from '../../../src/meeting/types';
 import {generateStructuredObservationForCapture} from '../../../src/observation/runObservationForCapture';
+import type {MeetingRuntimeState} from '../../../src/meetings/types';
 import {PLANNER_CONFIG} from '../../../src/planner/config';
 import {runPlannerRevision} from '../../../src/planner/revisionEngine';
 import type {PlannerRevisionCause, TaskPlanRevisionFailure} from '../../../src/planner/types';
@@ -50,8 +51,14 @@ import {
 } from '../../../src/timeline/diagnostics';
 import {buildReconciliationEvents} from '../../../src/tasks/reconcile';
 import {runTaskEngineForObservation} from '../../../src/tasks/runTaskEngineForObservation';
+import {
+  generateManagedObservationForCapture,
+  generateManagedReplanBlocks,
+} from '../ai/managedAiClient';
 import {nativeAudioClient} from '../audio/nativeAudioClient';
+import {calendarService} from '../calendar/googleCalendarService';
 import {captureClient} from '../capture/captureService';
+import {settingsService} from '../settings/settingsService';
 import {loadEventLog, saveEventLog} from '../storage/eventLogStorage';
 
 const EVENT_LOG_SAVE_DEBOUNCE_MS = 500;
@@ -84,6 +91,26 @@ type TimelineStatePayload = {
   audioRuntimeState: AudioRecordingRuntimeState;
   activeMeetingCandidate: MeetingCandidateView | null;
   diagnostics: TimelineDiagnosticsReport;
+  lastCapturedAt: string | null;
+  lastObservedAt: string | null;
+  plannerLastRunAt: string | null;
+  plannerLastSnapshotId: string | null;
+  plannerLastFailureMessage: string | null;
+  plannerStatus: 'idle' | 'planning' | 'failed';
+  privacyModeEnabled: boolean;
+  aiConnectionMode: ReturnType<typeof settingsService.publicSettings>['aiConnectionMode'];
+  selectedProvider: ReturnType<typeof settingsService.publicSettings>['selectedProvider'];
+  managedAi: ReturnType<typeof settingsService.publicSettings>['managedAi'];
+  apiKeyStatus: ReturnType<typeof settingsService.publicSettings>['apiKeys'];
+  recentActivity: Array<{
+    kind: 'capture' | 'observation' | 'planner';
+    occurredAt: string;
+    title: string;
+    detail: string;
+  }>;
+  meetingDetection: MeetingRuntimeState['currentDetection'];
+  activeMeetingRecording: MeetingRuntimeState['activeRecording'];
+  meetingTranscriptionStatus: MeetingRuntimeState['transcriptionStatus'];
 };
 
 function trimCalendarText(value: unknown): string {
@@ -176,6 +203,7 @@ class ElectronTimelineService {
   private errorMessage: string | null = null;
   private captureEnabled = false;
   private captureStatusMessage = 'Continuous capture is off.';
+  private privacyModeEnabled = false;
   private plannerInFlight = false;
   private persistTimer: NodeJS.Timeout | null = null;
   private captureTimer: NodeJS.Timeout | null = null;
@@ -192,12 +220,38 @@ class ElectronTimelineService {
   private plannerLastFailure: TaskPlanRevisionFailure | null = null;
   private plannerLastSkippedReason: string | null = null;
   private plannerConsecutiveFailureCount = 0;
+  private lastCapturedAt: string | null = null;
+  private lastObservedAt: string | null = null;
+  private meetingRuntimeSnapshot: Pick<
+    MeetingRuntimeState,
+    'currentDetection' | 'activeRecording' | 'transcriptionStatus'
+  > = {
+    currentDetection: null,
+    activeRecording: null,
+    transcriptionStatus: 'idle',
+  };
   private audioInFlight = false;
   private audioLastError: string | null = null;
   private currentNativeAudioRecordingId: string | null = null;
 
   constructor() {
+    settingsService.on('changed', settings => {
+      const wasPrivacyModeEnabled = this.privacyModeEnabled;
+      this.privacyModeEnabled = settings.privacyModeEnabled;
+      if (settings.privacyModeEnabled && !wasPrivacyModeEnabled) {
+        this.captureEnabled = false;
+        this.captureStatusMessage = 'Privacy mode is on. Capture is paused.';
+        this.clearCaptureTimer();
+        this.clearPlannerCadence();
+        captureClient.stopMonitoring().catch(() => {});
+      } else if (!settings.privacyModeEnabled && wasPrivacyModeEnabled) {
+        this.captureStatusMessage = 'Continuous capture is off.';
+        this.startContextMonitoring().catch(() => {});
+      }
+      this.broadcast();
+    });
     captureClient.on('contextSnapshotDidChange', snapshot => {
+      if (this.isPrivacyModeEnabled()) return;
       const sanitizedSnapshot = sanitizeContextSnapshot(snapshot) ?? snapshot;
       this.appendEvents([
         {
@@ -259,6 +313,7 @@ class ElectronTimelineService {
       const payload = await loadEventLog();
       this.eventLog = payload.eventLog;
       this.timeline = replayEventLog(payload.eventLog);
+      this.recoverRuntimeMarkers(payload.eventLog);
       const orphanRepairEvent = buildOrphanedAudioRecordingRepairEvent({
         timeline: this.timeline,
         occurredAt: createOccurredAt(),
@@ -275,7 +330,13 @@ class ElectronTimelineService {
       if (orphanRepairEvent != null) {
         this.schedulePersist();
       }
-      await this.startContextMonitoring();
+      this.privacyModeEnabled =
+        settingsService.publicSettings().privacyModeEnabled;
+      if (!this.privacyModeEnabled) {
+        await this.startContextMonitoring();
+      } else {
+        this.captureStatusMessage = 'Privacy mode is on. Capture is paused.';
+      }
     } catch (error) {
       this.hydrationStatus = 'error';
       this.errorMessage =
@@ -285,6 +346,7 @@ class ElectronTimelineService {
   }
 
   private async startContextMonitoring() {
+    if (this.isPrivacyModeEnabled()) return;
     const snapshot = await captureClient.startMonitoring({
       preciseModeEnabled: true,
       idleThresholdSeconds: 60,
@@ -302,6 +364,12 @@ class ElectronTimelineService {
     this.maybePromptForMeeting();
   }
 
+  private isPrivacyModeEnabled() {
+    this.privacyModeEnabled =
+      settingsService.publicSettings().privacyModeEnabled;
+    return this.privacyModeEnabled;
+  }
+
   snapshot(): TimelineStatePayload {
     // Keep observations/captures/context in the renderer payload because task
     // selectors use them to extend stable-screen work. The timeline is trimmed
@@ -311,6 +379,7 @@ class ElectronTimelineService {
       ...this.timeline,
       captureInspectionsById: {},
     };
+    const settings = settingsService.publicSettings();
     return {
       eventLogLength: this.eventLog.length,
       timeline: leanTimeline,
@@ -345,7 +414,67 @@ class ElectronTimelineService {
         eventLog: this.eventLog,
         captureEnabled: this.captureEnabled,
       }),
+      lastCapturedAt: this.lastCapturedAt,
+      lastObservedAt: this.lastObservedAt,
+      plannerLastRunAt: this.plannerLastRunAt,
+      plannerLastSnapshotId: this.plannerLastSnapshotId,
+      plannerLastFailureMessage: this.plannerLastFailure?.message ?? null,
+      plannerStatus: this.plannerInFlight
+        ? 'planning'
+        : this.plannerLastFailure != null
+          ? 'failed'
+          : 'idle',
+      privacyModeEnabled: settings.privacyModeEnabled,
+      aiConnectionMode: settings.aiConnectionMode,
+      selectedProvider: settings.selectedProvider,
+      managedAi: settings.managedAi,
+      apiKeyStatus: settings.apiKeys,
+      recentActivity: this.recentActivity(),
+      meetingDetection: this.meetingRuntimeSnapshot.currentDetection,
+      activeMeetingRecording: this.meetingRuntimeSnapshot.activeRecording,
+      meetingTranscriptionStatus:
+        this.meetingRuntimeSnapshot.transcriptionStatus,
     };
+  }
+
+  private recentActivity(): TimelineStatePayload['recentActivity'] {
+    const rows: TimelineStatePayload['recentActivity'] = [];
+    for (let i = this.eventLog.length - 1; i >= 0 && rows.length < 8; i -= 1) {
+      const event = this.eventLog[i];
+      if (event.type === 'capture_performed') {
+        rows.push({
+          kind: 'capture',
+          occurredAt: event.occurredAt,
+          title: 'Capture',
+          detail: event.capture.status,
+        });
+      }
+      if (event.type === 'observation_added') {
+        rows.push({
+          kind: 'observation',
+          occurredAt: event.occurredAt,
+          title: 'Observation',
+          detail: event.text,
+        });
+      }
+      if (event.type === 'task_plan_revised') {
+        rows.push({
+          kind: 'planner',
+          occurredAt: event.occurredAt,
+          title: 'Plan revised',
+          detail: `${event.snapshot.blocks.length} blocks`,
+        });
+      }
+      if (event.type === 'task_plan_revision_failed') {
+        rows.push({
+          kind: 'planner',
+          occurredAt: event.occurredAt,
+          title: 'Plan failed',
+          detail: event.failure.message,
+        });
+      }
+    }
+    return rows;
   }
 
   private broadcast() {
@@ -364,6 +493,27 @@ class ElectronTimelineService {
     this.trimTimeline();
     this.schedulePersist();
     this.broadcast();
+  }
+
+  appendProactiveEvents(events: DomainEvent[]) {
+    this.appendEvents(events);
+  }
+
+  appendMeetingEvents(events: DomainEvent[]) {
+    this.appendEvents(events);
+  }
+
+  setMeetingRuntimeSnapshot(
+    state: Pick<
+      MeetingRuntimeState,
+      'currentDetection' | 'activeRecording' | 'transcriptionStatus'
+    >,
+  ) {
+    this.meetingRuntimeSnapshot = state;
+  }
+
+  getTimelineForServices(): TimelineView {
+    return this.timeline;
   }
 
   private maybePromptForMeeting() {
@@ -478,6 +628,11 @@ class ElectronTimelineService {
   }
 
   startSession() {
+    if (this.isPrivacyModeEnabled()) {
+      this.captureStatusMessage = 'Privacy mode is on. Capture is paused.';
+      this.broadcast();
+      return this.snapshot();
+    }
     if (this.timeline.currentSessionId != null) {
       this.captureEnabled = true;
       this.captureStatusMessage = 'Continuous capture resumed.';
@@ -609,12 +764,18 @@ class ElectronTimelineService {
   }
 
   async captureNow() {
+    if (this.isPrivacyModeEnabled()) {
+      this.captureStatusMessage = 'Privacy mode is on. Capture is paused.';
+      this.broadcast();
+      throw new Error('Privacy mode is on. Turn it off before capturing.');
+    }
     const result = await captureClient.captureNow();
     const captureMetadata = sanitizeCaptureMetadata({
       ...result.metadata,
       staleFrame: false,
       blankFrame: false,
     });
+    this.lastCapturedAt = captureMetadata.capturedAt;
     this.appendEvents([
       {
         id: createDomainId('event'),
@@ -648,7 +809,7 @@ class ElectronTimelineService {
     this.captureStatusMessage = 'Generating a structured observation.';
     this.broadcast();
     try {
-      const run = await generateStructuredObservationForCapture({
+      const observationArgs = {
         preview: {
           dataUri:
             result.previewBase64 != null && result.previewMimeType != null
@@ -664,8 +825,15 @@ class ElectronTimelineService {
           .filter(observation => observation.structured != null)
           .slice(-5)
           .map(observation => observation.structured!),
-        apiKey: process.env.GEMINI_API_KEY,
-      });
+      };
+      const settings = settingsService.publicSettings();
+      const run =
+        settings.aiConnectionMode === 'managed' && settings.managedAi.configured
+          ? await generateManagedObservationForCapture(observationArgs)
+          : await generateStructuredObservationForCapture({
+              ...observationArgs,
+              apiKey: process.env.GEMINI_API_KEY,
+            });
       const observationId = createDomainId('observation');
       this.appendEvents([
         {
@@ -694,6 +862,7 @@ class ElectronTimelineService {
       this.maybeKickoffSessionStartPlan(observationSessionId);
       this.maybePromptForMeeting();
       this.lastObservedFrameHash = captureMetadata.frameHash;
+      this.lastObservedAt = captureMetadata.capturedAt;
       this.captureStatusMessage = 'Captured the latest changed frame.';
     } catch (error) {
       this.captureStatusMessage =
@@ -737,15 +906,32 @@ class ElectronTimelineService {
     this.plannerInFlight = true;
     this.broadcast();
     try {
+      const settings = settingsService.publicSettings();
+      const windowEndAt = createOccurredAt();
+      const windowStartAt = new Date(
+        Date.parse(windowEndAt) - PLANNER_CONFIG.plannerRevisionWindowMs,
+      ).toISOString();
       const result = await runPlannerRevision({
         timeline: this.timeline,
+        now: windowEndAt,
         cause: request.cause,
         force: request.force,
         sessionIdOverride: request.sessionIdOverride,
         windowMs: PLANNER_CONFIG.plannerRevisionWindowMs,
+        calendarContext: calendarService.getContextForRange(
+          windowStartAt,
+          windowEndAt,
+        ),
         maxObservationsInPrompt:
           PLANNER_CONFIG.plannerRevisionMaxObservationsInPrompt,
-        apiKey: process.env.GEMINI_API_KEY,
+        apiKey:
+          settings.aiConnectionMode === 'managed'
+            ? undefined
+            : process.env.GEMINI_API_KEY,
+        runReplan:
+          settings.aiConnectionMode === 'managed' && settings.managedAi.configured
+            ? generateManagedReplanBlocks
+            : undefined,
       });
       if (result.kind !== 'skipped') {
         this.appendEvents(result.events);
@@ -858,6 +1044,34 @@ class ElectronTimelineService {
         id: createDomainId('event'),
         type: 'calendar_item_deleted',
         itemId,
+        occurredAt: createOccurredAt(),
+      },
+    ]);
+    return this.snapshot();
+  }
+
+  correctBlock(args: {
+    blockId: string;
+    notesKey?: string;
+    title?: string;
+    category?: string;
+    markedWrong?: boolean;
+    feedback?: string;
+    mergeWithBlockId?: string;
+    splitAt?: string;
+  }) {
+    this.appendEvents([
+      {
+        id: createDomainId('event'),
+        type: 'user_block_corrected',
+        blockId: args.blockId,
+        notesKey: args.notesKey,
+        title: args.title,
+        category: args.category,
+        markedWrong: args.markedWrong,
+        feedback: args.feedback,
+        mergeWithBlockId: args.mergeWithBlockId,
+        splitAt: args.splitAt,
         occurredAt: createOccurredAt(),
       },
     ]);
@@ -1098,6 +1312,26 @@ class ElectronTimelineService {
     });
     return this.snapshot();
   }
+
+  private recoverRuntimeMarkers(eventLog: DomainEvent[]) {
+    for (const event of eventLog) {
+      if (event.type === 'capture_performed') {
+        this.lastCapturedAt = event.capture.capturedAt;
+      }
+      if (event.type === 'observation_added') {
+        this.lastObservedAt = event.occurredAt;
+      }
+      if (event.type === 'task_plan_revised') {
+        this.plannerLastRunAt = event.snapshot.revisedAt;
+        this.plannerLastSnapshotId = event.snapshot.snapshotId;
+        this.plannerLastFailure = null;
+      }
+      if (event.type === 'task_plan_revision_failed') {
+        this.plannerLastRunAt = event.failure.failedAt;
+        this.plannerLastFailure = event.failure;
+      }
+    }
+  }
 }
 
 export const timelineService = new ElectronTimelineService();
@@ -1127,5 +1361,8 @@ export function registerTimelineIpcHandlers() {
   );
   ipcMain.handle('flow:timeline:deleteCalendarItem', (_event, itemId) =>
     timelineService.deleteCalendarItem(itemId),
+  );
+  ipcMain.handle('flow:timeline:correctBlock', (_event, args) =>
+    timelineService.correctBlock(args),
   );
 }

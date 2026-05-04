@@ -17,7 +17,7 @@ describe('Electron context monitoring', () => {
       bundleIdentifier: 'com.cursor',
       processId: 1,
       windowTitle: 'A',
-      windowFrame: {x: 0, y: 0, width: 100, height: 100},
+      windowFrame: { x: 0, y: 0, width: 100, height: 100 },
       accessibilityTrusted: false,
       captureAccessGranted: false,
       isIdle: false,
@@ -29,7 +29,7 @@ describe('Electron context monitoring', () => {
       bundleIdentifier: 'com.google.Chrome',
       processId: 2,
       windowTitle: 'B',
-      windowFrame: {x: 10, y: 0, width: 100, height: 100},
+      windowFrame: { x: 10, y: 0, width: 100, height: 100 },
       accessibilityTrusted: true,
       captureAccessGranted: true,
       isIdle: true,
@@ -52,6 +52,6 @@ describe('Electron context monitoring', () => {
   test('returns no changes for equivalent snapshots', () => {
     const snapshot = createFallbackSnapshot(true);
 
-    expect(computeContextChangeReasons(snapshot, {...snapshot})).toEqual([]);
+    expect(computeContextChangeReasons(snapshot, { ...snapshot })).toEqual([]);
   });
 });

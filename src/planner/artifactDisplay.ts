@@ -57,7 +57,9 @@ export function looksLikeWindowChrome(value: string): boolean {
   const hasChromeKeyword = lowered.some(segment =>
     Array.from(chromeKeywords).some(keyword => segment.includes(keyword)),
   );
-  const looksLikeDomain = /\b[a-z0-9-]+\.(com|io|dev|ai|app|co)\b/i.test(trimmed);
+  const looksLikeDomain = /\b[a-z0-9-]+\.(com|io|dev|ai|app|co)\b/i.test(
+    trimmed,
+  );
   return hasChromeKeyword && (looksLikeDomain || segments.length >= 3);
 }
 

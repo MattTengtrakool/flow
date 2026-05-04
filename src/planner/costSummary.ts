@@ -1,6 +1,6 @@
-import type {TimelineView} from '../timeline/eventLog';
-import {estimateCostUsd, getModelPricing} from './pricing';
-import type {PlanUsageProvider, TaskPlanSnapshot} from './types';
+import type { TimelineView } from '../timeline/eventLog';
+import { estimateCostUsd, getModelPricing } from './pricing';
+import type { PlanUsageProvider, TaskPlanSnapshot } from './types';
 
 export type CostBucket = {
   inputTokens: number;
@@ -19,15 +19,13 @@ export type CostSummary = {
   last7Days: CostBucket;
   last30Days: CostBucket;
   byProvider: ProviderCost[];
-  lastPlan:
-    | {
-        model: string;
-        revisedAt: string;
-        inputTokens: number;
-        outputTokens: number;
-        costUsd: number;
-      }
-    | null;
+  lastPlan: {
+    model: string;
+    revisedAt: string;
+    inputTokens: number;
+    outputTokens: number;
+    costUsd: number;
+  } | null;
   firstPlanAt: string | null;
   pricedPlanCount: number;
   unpricedPlanCount: number;
@@ -38,6 +36,7 @@ const DAY_MS = 24 * 60 * 60 * 1000;
 const PROVIDER_DISPLAY: Record<PlanUsageProvider, string> = {
   gemini: 'Google Gemini',
   anthropic: 'Anthropic Claude',
+  managed: 'Managed Flow AI',
 };
 
 export function computeCostSummary(timeline: TimelineView): CostSummary {
@@ -138,7 +137,7 @@ function snapshotCost(snapshot: TaskPlanSnapshot): SnapshotCost {
 }
 
 function emptyBucket(): CostBucket {
-  return {inputTokens: 0, outputTokens: 0, costUsd: 0, planCount: 0};
+  return { inputTokens: 0, outputTokens: 0, costUsd: 0, planCount: 0 };
 }
 
 function addToBucket(bucket: CostBucket, cost: SnapshotCost): void {

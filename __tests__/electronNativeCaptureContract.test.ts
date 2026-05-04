@@ -1,8 +1,8 @@
 import fs from 'node:fs';
 import path from 'node:path';
 
-import {validateCaptureForObservation} from '../src/observation/runObservationForCapture';
-import type {CaptureResultPayload} from '../src/types/contextCapture';
+import { validateCaptureForObservation } from '../src/observation/runObservationForCapture';
+import type { CaptureResultPayload } from '../src/types/contextCapture';
 import {
   migrationCaptureInspection,
   migrationCaptureResult,

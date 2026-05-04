@@ -1,10 +1,13 @@
-import {getAllPlanCalendarBlocks, getDayWorklog} from '../src/planner/selectors';
+import {
+  getAllPlanCalendarBlocks,
+  getDayWorklog,
+} from '../src/planner/selectors';
 import {
   sanitizeCaptureMetadata,
   sanitizeInspection,
 } from '../src/privacy/redaction';
-import {validateCaptureForObservation} from '../src/observation/runObservationForCapture';
-import {replayEventLog} from '../src/timeline/eventLog';
+import { validateCaptureForObservation } from '../src/observation/runObservationForCapture';
+import { replayEventLog } from '../src/timeline/eventLog';
 import {
   migrationCaptureInspection,
   migrationCaptureMetadata,

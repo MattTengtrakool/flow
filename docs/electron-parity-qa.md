@@ -7,10 +7,8 @@ Use this checklist before shipping a release.
 Run:
 
 ```bash
-pnpm test
-pnpm lint
-pnpm typecheck
 pnpm native-capture:build
+pnpm check
 pnpm electron:build
 pnpm electron:dist
 ```

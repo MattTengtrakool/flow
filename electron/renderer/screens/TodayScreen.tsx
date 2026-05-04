@@ -1,10 +1,10 @@
-import {memo} from 'react';
+import { memo } from 'react';
 
-import type {WorklogCalendarBlock} from '../../../src/worklog/types';
-import {focusedMinutes} from '../dateUtils';
-import {BlockCard} from '../components/BlockCard';
-import {MetricCard} from '../components/MetricCard';
-import {Screen} from '../components/common';
+import type { WorklogCalendarBlock } from '../../../src/worklog/types';
+import { focusedMinutes } from '../dateUtils';
+import { BlockCard } from '../components/BlockCard';
+import { MetricCard } from '../components/MetricCard';
+import { Screen } from '../components/common';
 
 export const TodayScreen = memo(function TodayScreen(props: {
   todayIso: string;
@@ -24,7 +24,7 @@ export const TodayScreen = memo(function TodayScreen(props: {
         <div>
           <p className="eyebrow">{props.todayIso}</p>
           <h2>Work timeline</h2>
-          <p style={{marginTop: 4}}>{props.captureStatus}</p>
+          <p className="hero-caption">{props.captureStatus}</p>
         </div>
         <div className="metric-grid compact">
           <MetricCard label="Focused time" value={`${minutes}m`} />
@@ -33,13 +33,25 @@ export const TodayScreen = memo(function TodayScreen(props: {
       </section>
 
       <div className="button-row">
-        <button type="button" className="button-secondary" onClick={props.onStartSession}>
+        <button
+          type="button"
+          className="button-secondary"
+          onClick={props.onStartSession}
+        >
           Start session
         </button>
-        <button type="button" className="button-secondary" onClick={props.onCaptureNow}>
+        <button
+          type="button"
+          className="button-secondary"
+          onClick={props.onCaptureNow}
+        >
           Capture now
         </button>
-        <button type="button" className="button-secondary" onClick={props.onReplanNow}>
+        <button
+          type="button"
+          className="button-secondary"
+          onClick={props.onReplanNow}
+        >
           Replan now
         </button>
       </div>
@@ -47,7 +59,9 @@ export const TodayScreen = memo(function TodayScreen(props: {
       {props.blocks.length === 0 ? (
         <div className="empty-state roomy">
           <strong>No work blocks yet</strong>
-          <p>Start a session and Flow will turn captures into a daily worklog.</p>
+          <p>
+            Start a session and Flow will turn captures into a daily worklog.
+          </p>
         </div>
       ) : (
         <div className="timeline-list">

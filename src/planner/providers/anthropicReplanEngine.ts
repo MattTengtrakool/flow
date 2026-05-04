@@ -1,39 +1,23 @@
-import {getConfiguredApiKey} from '../../config/apiKeys';
-import {OBSERVATION_ACTIVITY_TYPES} from '../../observation/types';
-import {sampleObservationIds} from '../condenseObservations';
+import { getConfiguredApiKey } from '../../config/apiKeys';
+import { buildReplanPrompt } from '../replanPrompt';
+import { coerceBlocks, expandClusterIds } from '../replanResponse';
 import {
-  buildReplanPrompt,
-  coerceBlocks,
-  expandClusterIds,
-  sleep,
-  type GeminiReplanInput,
-  type GeminiReplanRawBlock,
-  type GeminiReplanResult,
+  CATEGORY_VALUES,
+  WORKLOG_LABELS,
   type ParsedReplanBlock,
-} from './geminiReplanEngine';
-import {
-  PLANNER_PROMPT_VERSION,
-  type PlanUsage,
-} from '../types';
+  type ReplanInput,
+  type ReplanResult,
+} from '../replanTypes';
+import { sleep } from '../retry';
+import { PLANNER_PROMPT_VERSION, type PlanUsage } from '../types';
 
 export const DEFAULT_ANTHROPIC_REPLAN_MODEL = 'claude-sonnet-4-5-20250929';
 
-const MAX_SOURCE_OBSERVATIONS_PER_BLOCK = 40;
 const ANTHROPIC_MAX_TOKENS = 16000;
 
 const TRANSIENT_RETRY_ATTEMPTS = 3;
 const TRANSIENT_RETRY_BASE_DELAY_MS = 1500;
 const TRANSIENT_RETRY_MAX_DELAY_MS = 12000;
-
-const WORKLOG_LABELS = [
-  'worked_on',
-  'reviewed',
-  'drafted',
-  'likely_completed',
-  'confirmed_completed',
-] as const;
-
-const CATEGORY_VALUES = [...OBSERVATION_ACTIVITY_TYPES, 'other'] as const;
 
 const REPLAN_TOOL_INPUT_SCHEMA = {
   type: 'object',
@@ -58,15 +42,17 @@ const REPLAN_TOOL_INPUT_SCHEMA = {
           'sourceClusterIds',
         ],
         properties: {
-          startAt: {type: 'string'},
-          endAt: {type: 'string'},
-          headline: {type: 'string'},
-          narrative: {type: 'string'},
-          notes: {type: 'string'},
-          label: {type: 'string', enum: [...WORKLOG_LABELS]},
-          category: {type: 'string', enum: [...CATEGORY_VALUES]},
-          confidence: {type: 'number'},
-          keyActivities: {type: 'array', items: {type: 'string'}},
+          startAt: { type: 'string' },
+          endAt: { type: 'string' },
+          headline: { type: 'string' },
+          narrative: { type: 'string' },
+          notes: { type: 'string' },
+          label: { type: 'string', enum: [...WORKLOG_LABELS] },
+          category: { type: 'string', enum: [...CATEGORY_VALUES] },
+          confidence: { type: 'number' },
+          keyActivities: { type: 'array', items: { type: 'string' } },
+          nextActions: { type: 'array', items: { type: 'string' } },
+          calendarEventIds: { type: 'array', items: { type: 'string' } },
           artifacts: {
             type: 'object',
             required: [
@@ -78,16 +64,16 @@ const REPLAN_TOOL_INPUT_SCHEMA = {
               'people',
             ],
             properties: {
-              apps: {type: 'array', items: {type: 'string'}},
-              repositories: {type: 'array', items: {type: 'string'}},
-              urls: {type: 'array', items: {type: 'string'}},
-              tickets: {type: 'array', items: {type: 'string'}},
-              documents: {type: 'array', items: {type: 'string'}},
-              people: {type: 'array', items: {type: 'string'}},
+              apps: { type: 'array', items: { type: 'string' } },
+              repositories: { type: 'array', items: { type: 'string' } },
+              urls: { type: 'array', items: { type: 'string' } },
+              tickets: { type: 'array', items: { type: 'string' } },
+              documents: { type: 'array', items: { type: 'string' } },
+              people: { type: 'array', items: { type: 'string' } },
             },
           },
-          reasonCodes: {type: 'array', items: {type: 'string'}},
-          sourceClusterIds: {type: 'array', items: {type: 'string'}},
+          reasonCodes: { type: 'array', items: { type: 'string' } },
+          sourceClusterIds: { type: 'array', items: { type: 'string' } },
         },
       },
     },
@@ -95,7 +81,7 @@ const REPLAN_TOOL_INPUT_SCHEMA = {
 } as const;
 
 type AnthropicContentBlock =
-  | {type: 'text'; text: string}
+  | { type: 'text'; text: string }
   | {
       type: 'tool_use';
       name: string;
@@ -118,7 +104,11 @@ type AnthropicResponse = {
 export class AnthropicRetryableError extends Error {
   readonly status: number;
   readonly kind: 'overloaded' | 'rate_limited';
-  constructor(message: string, status: number, kind: 'overloaded' | 'rate_limited') {
+  constructor(
+    message: string,
+    status: number,
+    kind: 'overloaded' | 'rate_limited',
+  ) {
     super(message);
     this.name = 'AnthropicRetryableError';
     this.status = status;
@@ -127,14 +117,14 @@ export class AnthropicRetryableError extends Error {
 }
 
 export async function generateReplanBlocksWithAnthropic(
-  input: GeminiReplanInput,
-): Promise<GeminiReplanResult> {
+  input: ReplanInput,
+): Promise<ReplanResult> {
   const apiKey = (
     input.apiKey ?? getConfiguredApiKey('ANTHROPIC_API_KEY')
   ).trim();
   if (apiKey.length === 0) {
     throw new Error(
-      'An Anthropic API key is required to use the Claude fallback. Set ANTHROPIC_API_KEY in .env.',
+      'An Anthropic API key is required to use the local Claude fallback. Set ANTHROPIC_API_KEY in the environment.',
     );
   }
 
@@ -149,7 +139,7 @@ export async function generateReplanBlocksWithAnthropic(
   });
 
   const parsed = parseAnthropicResponse(response);
-  const expanded = expandClusterIdsWithCap(parsed, input);
+  const expanded = expandClusterIds(parsed, input.clusters);
 
   const usage: PlanUsage | undefined =
     response.usage != null
@@ -221,7 +211,7 @@ async function callAnthropicOnce(args: {
           input_schema: REPLAN_TOOL_INPUT_SCHEMA,
         },
       ],
-      tool_choice: {type: 'tool', name: 'submit_task_plan'},
+      tool_choice: { type: 'tool', name: 'submit_task_plan' },
       messages: [
         {
           role: 'user',
@@ -239,7 +229,11 @@ async function callAnthropicOnce(args: {
       `Anthropic replan request failed with status ${response.status}.`;
 
     if (response.status === 429 || /rate[- ]?limit/i.test(message)) {
-      throw new AnthropicRetryableError(message, response.status, 'rate_limited');
+      throw new AnthropicRetryableError(
+        message,
+        response.status,
+        'rate_limited',
+      );
     }
     if (
       response.status === 503 ||
@@ -255,9 +249,11 @@ async function callAnthropicOnce(args: {
   return payload;
 }
 
-function parseAnthropicResponse(response: AnthropicResponse): ParsedReplanBlock[] {
+function parseAnthropicResponse(
+  response: AnthropicResponse,
+): ParsedReplanBlock[] {
   const toolBlock = response.content?.find(
-    (block): block is Extract<AnthropicContentBlock, {type: 'tool_use'}> =>
+    (block): block is Extract<AnthropicContentBlock, { type: 'tool_use' }> =>
       block.type === 'tool_use' && block.name === 'submit_task_plan',
   );
 
@@ -268,7 +264,7 @@ function parseAnthropicResponse(response: AnthropicResponse): ParsedReplanBlock[
       );
     }
     const textBlock = response.content?.find(
-      (block): block is Extract<AnthropicContentBlock, {type: 'text'}> =>
+      (block): block is Extract<AnthropicContentBlock, { type: 'text' }> =>
         block.type === 'text',
     );
     const preview = textBlock != null ? textBlock.text.slice(0, 240) : '';
@@ -284,18 +280,4 @@ function parseAnthropicResponse(response: AnthropicResponse): ParsedReplanBlock[
     JSON.stringify(toolBlock.input),
     response.stop_reason,
   );
-}
-
-function expandClusterIdsWithCap(
-  parsed: ParsedReplanBlock[],
-  input: GeminiReplanInput,
-): GeminiReplanRawBlock[] {
-  const expanded = expandClusterIds(parsed, input.clusters);
-  return expanded.map(block => ({
-    ...block,
-    sourceObservationIds: sampleObservationIds(
-      block.sourceObservationIds,
-      MAX_SOURCE_OBSERVATIONS_PER_BLOCK,
-    ),
-  }));
 }

@@ -1,29 +1,34 @@
 {
-  "name": "Flow",
+  "name": "flow",
   "version": "0.0.1",
   "description": "A local-first AI worklog for macOS.",
-  "author": "Flow",
+  "author": "Matt Tengtrakool",
   "private": true,
   "license": "MIT",
+  "packageManager": "pnpm@10.33.0",
   "repository": {
     "type": "git",
-    "url": "https://github.com/flow/flow.git"
+    "url": "git+https://github.com/MattTengtrakool/flow.git"
   },
-  "homepage": "https://github.com/flow/flow#readme",
+  "homepage": "https://github.com/MattTengtrakool/flow#readme",
   "bugs": {
-    "url": "https://github.com/flow/flow/issues"
+    "url": "https://github.com/MattTengtrakool/flow/issues"
   },
   "main": "dist-electron/electron/main/main.js",
   "scripts": {
     "electron:build": "pnpm electron:build:main && pnpm electron:build:renderer",
     "electron:build:main": "tsc -p electron/tsconfig.json",
     "electron:build:renderer": "vite build --config vite.config.ts",
-    "electron:dev": "pnpm native-audio:build && pnpm electron:build:main && concurrently -k \"vite --config vite.config.ts\" \"wait-on http://localhost:5173 && electron .\"",
+    "electron:dev": "pnpm native-audio:build && pnpm electron:build:main && concurrently -k \"vite --config vite.config.ts\" \"wait-on http://localhost:5173 && FLOW_APP_PROFILE=dev electron .\"",
+    "electron:dev:prod-data": "pnpm native-audio:build && pnpm electron:build:main && concurrently -k \"vite --config vite.config.ts\" \"wait-on http://localhost:5173 && FLOW_APP_PROFILE=prod electron .\"",
     "electron:dist": "pnpm native-capture:build && pnpm native-audio:build && pnpm electron:build && electron-builder --mac dir --mac zip",
+    "electron:dist:dev": "pnpm native-capture:build && pnpm native-audio:build && pnpm electron:build && FLOW_APP_PROFILE=dev electron-builder --mac dir --mac zip --config.appId=com.flow.worklog.dev --config.productName=\"Flow Dev\" --config.directories.output=release-dev",
     "electron:dist:dmg": "pnpm native-capture:build && pnpm native-audio:build && pnpm electron:build && electron-builder --mac dmg",
     "native-capture:build": "mkdir -p electron/native-capture/build && xcrun clang++ -std=c++17 -fobjc-arc -framework Foundation -framework AppKit -framework ApplicationServices -framework CoreGraphics -framework ScreenCaptureKit -framework Vision electron/native-capture/FlowNativeCapture.mm -o electron/native-capture/build/FlowNativeCapture",
     "native-audio:build": "mkdir -p electron/native-audio/build && xcrun clang++ -std=c++17 -fobjc-arc -framework Foundation -framework AVFoundation -framework CoreGraphics -framework CoreMedia -framework ScreenCaptureKit -framework Speech -sectcreate __TEXT __info_plist electron/native-audio/Info.plist electron/native-audio/FlowAudioCapture.mm -o electron/native-audio/build/FlowAudioCapture",
     "doctor:node": "node ./scripts/ensureNodeCompatible.js",
+    "benchmark:planner": "node ./scripts/benchmarkPlanner.js",
+    "check": "pnpm format:check && pnpm lint && pnpm typecheck && pnpm test",
     "lint": "eslint .",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
@@ -81,6 +86,7 @@
       "brand/flow-icon-64.png",
       "brand/flow-icon-512.png",
       "brand/flow-icon-1024.png",
+      "brand/flow-icon.icns",
       "brand/generated/flow-menubar@1x.png",
       "brand/generated/flow-menubar@2x.png",
       "package.json"
@@ -100,7 +106,7 @@
       "hardenedRuntime": false,
       "identity": null,
       "gatekeeperAssess": false,
-      "icon": "brand/flow-icon-1024.png",
+      "icon": "brand/flow-icon.icns",
       "entitlements": "electron/entitlements.mac.plist",
       "entitlementsInherit": "electron/entitlements.mac.plist",
       "extendInfo": {

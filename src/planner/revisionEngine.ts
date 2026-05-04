@@ -5,7 +5,7 @@ import {
   type ObservationView,
   type TimelineView,
 } from '../timeline/eventLog';
-import {condenseObservations} from './condenseObservations';
+import { condenseObservations } from './condenseObservations';
 import {
   AnthropicRetryableError,
   generateReplanBlocksWithAnthropic,
@@ -29,6 +29,7 @@ import {
   type TaskPlanRevisionFailure,
   type TaskPlanSnapshot,
 } from './types';
+import type { CalendarContext } from '../calendar/types';
 
 export type RunPlannerRevisionArgs = {
   timeline: TimelineView;
@@ -37,13 +38,12 @@ export type RunPlannerRevisionArgs = {
   windowMs: number;
   maxObservationsInPrompt?: number;
   force?: boolean;
+  calendarContext?: CalendarContext;
   apiKey?: string;
   model?: string;
   sessionIdOverride?: string | null;
   runReplan?: (input: GeminiReplanInput) => Promise<GeminiReplanResult>;
-  runFallbackReplan?: (
-    input: GeminiReplanInput,
-  ) => Promise<GeminiReplanResult>;
+  runFallbackReplan?: (input: GeminiReplanInput) => Promise<GeminiReplanResult>;
 };
 
 export type RunPlannerRevisionResult =
@@ -85,7 +85,7 @@ export async function runPlannerRevision(
   );
 
   if (observationsInWindow.length === 0) {
-    return {kind: 'skipped', reason: 'no_observations'};
+    return { kind: 'skipped', reason: 'no_observations' };
   }
 
   const previousSnapshot = findMostRecentSnapshotForSession(
@@ -98,7 +98,7 @@ export async function runPlannerRevision(
     previousSnapshot != null &&
     matchesPreviousSnapshotInputs(previousSnapshot, observationsInWindow)
   ) {
-    return {kind: 'skipped', reason: 'no_new_observations'};
+    return { kind: 'skipped', reason: 'no_new_observations' };
   }
 
   const clusters = condenseObservations(observationsInWindow, {
@@ -114,6 +114,8 @@ export async function runPlannerRevision(
     windowEndAt,
     clusters,
     previousSnapshot,
+    calendarContext: args.calendarContext,
+    correctionHints: buildCorrectionHints(timeline, previousSnapshot),
     apiKey: args.apiKey,
     model: args.model,
   };
@@ -187,10 +189,10 @@ export async function runPlannerRevision(
           ? 'rate_limited'
           : 'transient_overload'
         : message.includes('API key') || message.includes('api key')
-          ? 'missing_api_key'
-          : message.includes('JSON') || message.includes('schema')
-            ? 'schema_validation_failed'
-            : 'engine_error';
+        ? 'missing_api_key'
+        : message.includes('JSON') || message.includes('schema')
+        ? 'schema_validation_failed'
+        : 'engine_error';
 
     const failure: TaskPlanRevisionFailure = {
       failedAt: createOccurredAt(),
@@ -218,6 +220,32 @@ export async function runPlannerRevision(
   }
 }
 
+function buildCorrectionHints(
+  timeline: TimelineView,
+  previousSnapshot: TaskPlanSnapshot | null,
+): GeminiReplanInput['correctionHints'] {
+  if (previousSnapshot == null) return [];
+  return previousSnapshot.blocks
+    .map(block => {
+      const notesKey = block.sourceObservationIds.slice().sort().join('|');
+      const correction =
+        timeline.userBlockCorrections[notesKey] ??
+        timeline.userBlockCorrections[block.id];
+      if (correction == null) return null;
+      return {
+        blockId: block.id,
+        sourceObservationIds: block.sourceObservationIds,
+        title: correction.title,
+        category: correction.category,
+        markedWrong: correction.markedWrong,
+        feedback: correction.feedback,
+        mergeWithBlockId: correction.mergeWithBlockId,
+        splitAt: correction.splitAt,
+      };
+    })
+    .filter((hint): hint is NonNullable<typeof hint> => hint != null);
+}
+
 /**
  * Detect and repair activity-style headlines that slipped past the prompt.
  *
@@ -234,11 +262,13 @@ function repairBlockHeadline(block: PlanBlock): PlanBlock {
   if (synthesized == null || synthesized === block.headline) {
     return block;
   }
-  return {...block, headline: synthesized};
+  return { ...block, headline: synthesized };
 }
 
-const GERUND_PREFIX_RE = /^(?:reviewing|debugging|configuring|developing|refactoring|implementing|writing|testing|managing|setting|handling|working|investigating|browsing|coding|planning|preparing|updating|fixing|building|checking|reading|monitoring|researching|drafting|deploying|syncing|triaging|analyzing|running|setting up)\b/i;
-const GENERIC_ALONE_RE = /^(?:workflow|workflows|environment|config|configuration|setup|updates|code|changes|work|task|miscellaneous)(?:\s|$)/i;
+const GERUND_PREFIX_RE =
+  /^(?:reviewing|debugging|configuring|developing|refactoring|implementing|writing|testing|managing|setting|handling|working|investigating|browsing|coding|planning|preparing|updating|fixing|building|checking|reading|monitoring|researching|drafting|deploying|syncing|triaging|analyzing|running|setting up)\b/i;
+const GENERIC_ALONE_RE =
+  /^(?:workflow|workflows|environment|config|configuration|setup|updates|code|changes|work|task|miscellaneous)(?:\s|$)/i;
 const TWO_ACTIVITIES_RE = /^[a-z]+ing\s+(?:&|and)\s+[a-z]+/i;
 
 export function isWellFormedTaskHeadline(headline: string): boolean {
@@ -260,9 +290,7 @@ function synthesizeHeadlineFromBlock(block: PlanBlock): string | null {
   const prFromUrl = firstPrNumber(block.artifacts.urls);
   if (prFromUrl != null) {
     const suffix = guessShortTopic(block);
-    return suffix != null
-      ? `${suffix} (PR ${prFromUrl})`
-      : `PR ${prFromUrl}`;
+    return suffix != null ? `${suffix} (PR ${prFromUrl})` : `PR ${prFromUrl}`;
   }
 
   const distinctiveFile = block.artifacts.documents.find(value =>
@@ -316,7 +344,10 @@ function guessShortTopic(block: PlanBlock): string | null {
   const activity = block.keyActivities[0];
   if (activity == null) return null;
   const stripped = activity
-    .replace(/^(reviewing|debugging|configuring|developing|refactoring|implementing|writing|testing|managing|setting|handling|working|investigating|browsing|coding|updating|fixing|building|checking|reading|researching|drafting|deploying|syncing|triaging|analyzing|running)\s+/i, '')
+    .replace(
+      /^(reviewing|debugging|configuring|developing|refactoring|implementing|writing|testing|managing|setting|handling|working|investigating|browsing|coding|updating|fixing|building|checking|reading|researching|drafting|deploying|syncing|triaging|analyzing|running)\s+/i,
+      '',
+    )
     .trim();
   if (stripped.length === 0 || stripped.length > 40) return null;
   return stripped;
@@ -341,14 +372,14 @@ export function pruneOutlierObservationIds(
 ): string[] {
   if (sourceObservationIds.length < 2) return sourceObservationIds;
 
-  const entries: Array<{id: string; ms: number; index: number}> = [];
+  const entries: Array<{ id: string; ms: number; index: number }> = [];
   for (let i = 0; i < sourceObservationIds.length; i += 1) {
     const id = sourceObservationIds[i];
     const observation = observationIndex.get(id);
     if (observation == null) continue;
     const ms = Date.parse(observation.observedAt);
     if (Number.isNaN(ms)) continue;
-    entries.push({id, ms, index: i});
+    entries.push({ id, ms, index: i });
   }
 
   if (entries.length < 2) return sourceObservationIds;
@@ -570,13 +601,27 @@ function normalizeBlock(
     keyActivities: dedupeArtifactsCaseInsensitive(
       raw.keyActivities.map(value => value.trim()).filter(v => v.length > 0),
     ),
+    nextActions: dedupeArtifactsCaseInsensitive(
+      (raw.nextActions ?? [])
+        .map(value => value.trim())
+        .filter(value => value.length > 0),
+    ).slice(0, 6),
+    calendarEventIds: dedupeArtifactsCaseInsensitive(
+      (raw.calendarEventIds ?? [])
+        .map(value => value.trim())
+        .filter(value => value.length > 0),
+    ).slice(0, 8),
     artifacts: {
-      apps: cleanArtifactList(raw.artifacts.apps, {stripChrome: false}),
-      repositories: cleanArtifactList(raw.artifacts.repositories, {stripChrome: false}),
-      urls: cleanArtifactList(raw.artifacts.urls, {stripChrome: false}),
-      tickets: cleanArtifactList(raw.artifacts.tickets, {stripChrome: false}),
-      documents: cleanArtifactList(raw.artifacts.documents, {stripChrome: true}),
-      people: cleanArtifactList(raw.artifacts.people, {stripChrome: false}),
+      apps: cleanArtifactList(raw.artifacts.apps, { stripChrome: false }),
+      repositories: cleanArtifactList(raw.artifacts.repositories, {
+        stripChrome: false,
+      }),
+      urls: cleanArtifactList(raw.artifacts.urls, { stripChrome: false }),
+      tickets: cleanArtifactList(raw.artifacts.tickets, { stripChrome: false }),
+      documents: cleanArtifactList(raw.artifacts.documents, {
+        stripChrome: true,
+      }),
+      people: cleanArtifactList(raw.artifacts.people, { stripChrome: false }),
     },
     reasonCodes: dedupeArtifactsCaseInsensitive(raw.reasonCodes),
     sourceObservationIds,
@@ -585,7 +630,7 @@ function normalizeBlock(
 
 function cleanArtifactList(
   values: string[],
-  options: {stripChrome: boolean},
+  options: { stripChrome: boolean },
 ): string[] {
   const filtered = options.stripChrome
     ? values.filter(value => !looksLikeWindowChrome(value))
@@ -595,9 +640,7 @@ function cleanArtifactList(
 
 const ADJACENT_MERGE_GAP_MS = 5 * 60 * 1000;
 
-export function mergeAdjacentBlocks(
-  blocks: PlanBlock[],
-): PlanBlock[] {
+export function mergeAdjacentBlocks(blocks: PlanBlock[]): PlanBlock[] {
   if (blocks.length < 2) return blocks;
   const sorted = [...blocks].sort((a, b) => a.startAt.localeCompare(b.startAt));
 
@@ -664,10 +707,7 @@ function firstFileArtifact(block: PlanBlock): string | null {
   return null;
 }
 
-function countSharedArtifacts(
-  a: PlanBlock,
-  b: PlanBlock,
-): number {
+function countSharedArtifacts(a: PlanBlock, b: PlanBlock): number {
   const fields: Array<keyof PlanBlock['artifacts']> = [
     'repositories',
     'tickets',
@@ -699,10 +739,7 @@ function countArtifacts(block: PlanBlock): number {
   );
 }
 
-function mergeBlocks(
-  a: PlanBlock,
-  b: PlanBlock,
-): PlanBlock {
+function mergeBlocks(a: PlanBlock, b: PlanBlock): PlanBlock {
   const primary = durationMs(a) >= durationMs(b) ? a : b;
   const secondary = primary === a ? b : a;
 
@@ -715,7 +752,10 @@ function mergeBlocks(
       ...a.artifacts.repositories,
       ...b.artifacts.repositories,
     ]),
-    urls: dedupeArtifactsCaseInsensitive([...a.artifacts.urls, ...b.artifacts.urls]),
+    urls: dedupeArtifactsCaseInsensitive([
+      ...a.artifacts.urls,
+      ...b.artifacts.urls,
+    ]),
     tickets: dedupeArtifactsCaseInsensitive([
       ...a.artifacts.tickets,
       ...b.artifacts.tickets,
@@ -748,6 +788,14 @@ function mergeBlocks(
       ...primary.keyActivities,
       ...secondary.keyActivities,
     ]).slice(0, 6),
+    nextActions: dedupeArtifactsCaseInsensitive([
+      ...(primary.nextActions ?? []),
+      ...(secondary.nextActions ?? []),
+    ]).slice(0, 6),
+    calendarEventIds: dedupeArtifactsCaseInsensitive([
+      ...(a.calendarEventIds ?? []),
+      ...(b.calendarEventIds ?? []),
+    ]).slice(0, 8),
     artifacts: mergedArtifacts,
     reasonCodes: dedupeArtifactsCaseInsensitive([
       ...a.reasonCodes,

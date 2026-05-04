@@ -11,11 +11,10 @@ const storageSourcePath = path.join(
 );
 
 describe('Electron event log storage contract', () => {
-  test('uses the legacy Flow Application Support event-log path as canonical', () => {
+  test('uses the profile-specific Application Support event-log path as canonical', () => {
     const source = fs.readFileSync(storageSourcePath, 'utf8');
 
-    expect(source).toContain("app.getPath('appData')");
-    expect(source).toContain("'Flow'");
+    expect(source).toContain('getAppDataDirectoryPath');
     expect(source).toContain("'event-log.json'");
   });
 
@@ -45,11 +44,13 @@ describe('Electron event log storage contract', () => {
     const source = fs.readFileSync(storageSourcePath, 'utf8');
 
     expect(source).toContain('let saveEventLogQueue: Promise<void>');
-    expect(source).toContain('JSON.stringify(eventLog, null, 2)');
-    expect(source).toContain('writeSerializedEventLog(serialized)');
+    expect(source).toContain("import { randomUUID } from 'node:crypto'");
+    expect(source).toContain('saveEventLogQueue.then(() =>');
     expect(source).toContain(
-      'const temporaryPath = `${filePath}.${randomUUID()}.tmp`',
+      'const temporaryPath = `${filePath}.${process.pid}.${randomUUID()}.tmp`',
     );
+    expect(source).toContain('JSON.stringify(eventLog, null, 2)');
+    expect(source).toContain('writeSerializedEventLog(filePath, serialized)');
     expect(source).toContain('await fs.writeFile(temporaryPath');
     expect(source).toContain('await fs.rename(temporaryPath, filePath)');
     expect(source).toContain('await fs.unlink(temporaryPath).catch(() => {})');

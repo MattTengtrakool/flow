@@ -1,9 +1,9 @@
-import {EventEmitter} from 'node:events';
-import {execFile} from 'node:child_process';
-import {existsSync} from 'node:fs';
+import { EventEmitter } from 'node:events';
+import { execFile } from 'node:child_process';
+import { existsSync } from 'node:fs';
 import path from 'node:path';
-import {promisify} from 'node:util';
-import {app} from 'electron';
+import { promisify } from 'node:util';
+import { app } from 'electron';
 
 import type {
   CaptureInspectionPayload,
@@ -55,12 +55,14 @@ async function callNativeHelper<T>(
   }
 
   const args = options == null ? [command] : [command, JSON.stringify(options)];
-  const {stdout} = await execFileAsync(helperPath, args, {
+  const { stdout } = await execFileAsync(helperPath, args, {
     maxBuffer: 8 * 1024 * 1024,
   });
   const firstLine = stdout.trim().split('\n')[0];
   if (firstLine == null || firstLine.length === 0) {
-    throw new Error(`Native capture helper returned no payload for ${command}.`);
+    throw new Error(
+      `Native capture helper returned no payload for ${command}.`,
+    );
   }
   const parsed = JSON.parse(firstLine) as unknown;
   if (
@@ -111,10 +113,9 @@ export class NativeCaptureClient extends EventEmitter<NativeCaptureEvents> {
       (await callNativeHelper<ContextSnapshotPayload>(
         'startMonitoring',
         this.currentOptions(),
-      )) ??
-      createFallbackSnapshot(this.preciseModeEnabled);
+      )) ?? createFallbackSnapshot(this.preciseModeEnabled);
     const reasons = computeContextChangeReasons(this.lastSnapshot, snapshot);
-    const initialSnapshot = {...snapshot, changeReasons: reasons};
+    const initialSnapshot = { ...snapshot, changeReasons: reasons };
     this.lastSnapshot = initialSnapshot;
     this.ensureMonitoringTimer();
     return initialSnapshot;
@@ -128,14 +129,15 @@ export class NativeCaptureClient extends EventEmitter<NativeCaptureEvents> {
     this.polling = false;
   }
 
-  async setPreciseModeEnabled(enabled: boolean): Promise<ContextSnapshotPayload> {
+  async setPreciseModeEnabled(
+    enabled: boolean,
+  ): Promise<ContextSnapshotPayload> {
     this.preciseModeEnabled = enabled;
     const snapshot =
       (await callNativeHelper<ContextSnapshotPayload>(
         'setPreciseModeEnabled',
         this.currentOptions(),
-      )) ??
-      createFallbackSnapshot(enabled);
+      )) ?? createFallbackSnapshot(enabled);
     const changed = {
       ...snapshot,
       changeReasons: computeContextChangeReasons(this.lastSnapshot, snapshot),
@@ -161,9 +163,12 @@ export class NativeCaptureClient extends EventEmitter<NativeCaptureEvents> {
           'currentContextSnapshot',
           this.currentOptions(),
         )) ?? createFallbackSnapshot(this.preciseModeEnabled);
-      const changeReasons = computeContextChangeReasons(this.lastSnapshot, snapshot);
+      const changeReasons = computeContextChangeReasons(
+        this.lastSnapshot,
+        snapshot,
+      );
       if (changeReasons.length === 0) return;
-      const changedSnapshot = {...snapshot, changeReasons};
+      const changedSnapshot = { ...snapshot, changeReasons };
       this.lastSnapshot = changedSnapshot;
       this.emit('contextSnapshotDidChange', changedSnapshot);
     } finally {
@@ -173,8 +178,9 @@ export class NativeCaptureClient extends EventEmitter<NativeCaptureEvents> {
 
   async requestAccessibilityPrompt(): Promise<PermissionsStatus> {
     return (
-      (await callNativeHelper<PermissionsStatus>('requestAccessibilityPrompt')) ??
-      fallbackPermissions()
+      (await callNativeHelper<PermissionsStatus>(
+        'requestAccessibilityPrompt',
+      )) ?? fallbackPermissions()
     );
   }
 
@@ -187,17 +193,17 @@ export class NativeCaptureClient extends EventEmitter<NativeCaptureEvents> {
 
   async requestScreenCaptureAccess(): Promise<PermissionsStatus> {
     return (
-      (await callNativeHelper<PermissionsStatus>('requestScreenCaptureAccess')) ??
-      fallbackPermissions()
+      (await callNativeHelper<PermissionsStatus>(
+        'requestScreenCaptureAccess',
+      )) ?? fallbackPermissions()
     );
   }
 
   async inspectCaptureTarget(): Promise<CaptureInspectionPayload> {
-    const helperResult =
-      await callNativeHelper<CaptureInspectionPayload>(
-        'inspectCaptureTarget',
-        this.currentOptions(),
-      );
+    const helperResult = await callNativeHelper<CaptureInspectionPayload>(
+      'inspectCaptureTarget',
+      this.currentOptions(),
+    );
     if (helperResult != null) {
       return helperResult;
     }

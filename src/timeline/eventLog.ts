@@ -18,6 +18,17 @@ import type {
   TaskPlanSnapshot,
 } from '../planner/types';
 import type {
+  ProactiveInsight,
+  ProactiveInsightView,
+} from '../proactive/types';
+import type {
+  MeetingAudioChunkMetadata,
+  MeetingDetection,
+  MeetingRecording,
+  MeetingSummary,
+  MeetingTranscriptChunk,
+} from '../meetings/types';
+import type {
   CalendarItemUpdate,
   UserCalendarItem,
 } from '../calendar/types';
@@ -104,6 +115,18 @@ export type UserBlockNotesEditedEvent = EventBase & {
   notes: string;
 };
 
+export type UserBlockCorrectedEvent = EventBase & {
+  type: 'user_block_corrected';
+  blockId: string;
+  notesKey?: string;
+  title?: string;
+  category?: string;
+  markedWrong?: boolean;
+  feedback?: string;
+  mergeWithBlockId?: string;
+  splitAt?: string;
+};
+
 export type CalendarItemCreatedEvent = EventBase & {
   type: 'calendar_item_created';
   item: UserCalendarItem;
@@ -142,6 +165,67 @@ export type MeetingEndedEvent = EventBase & {
   type: 'meeting_ended';
   meetingId: string;
   endedAt: string;
+};
+
+export type ProactiveInsightGeneratedEvent = EventBase & {
+  type: 'proactive_insight_generated';
+  insight: ProactiveInsight;
+};
+
+export type ProactiveInsightDismissedEvent = EventBase & {
+  type: 'proactive_insight_dismissed';
+  insightId: string;
+};
+
+export type ProactiveInsightSnoozedEvent = EventBase & {
+  type: 'proactive_insight_snoozed';
+  insightId: string;
+  snoozedUntil: string;
+};
+
+export type ProactiveInsightActionedEvent = EventBase & {
+  type: 'proactive_insight_actioned';
+  insightId: string;
+  actionId: string;
+};
+
+export type MeetingDetectedEvent = EventBase & {
+  type: 'meeting_detected';
+  detection: MeetingDetection;
+};
+
+export type MeetingDetectionDismissedEvent = EventBase & {
+  type: 'meeting_detection_dismissed';
+  detectionId: string;
+  dedupeKey: string;
+};
+
+export type MeetingTranscriptionStartedEvent = EventBase & {
+  type: 'meeting_transcription_started';
+  recording: MeetingRecording;
+};
+
+export type MeetingAudioChunkCapturedEvent = EventBase & {
+  type: 'meeting_audio_chunk_captured';
+  chunk: MeetingAudioChunkMetadata;
+};
+
+export type MeetingTranscriptChunkAddedEvent = EventBase & {
+  type: 'meeting_transcript_chunk_added';
+  chunk: MeetingTranscriptChunk;
+};
+
+export type MeetingTranscriptionStoppedEvent = EventBase & {
+  type: 'meeting_transcription_stopped';
+  meetingId: string;
+  stoppedAt: string;
+  reason: 'user' | 'privacy' | 'error' | 'completed';
+};
+
+export type MeetingTranscriptionFailedEvent = EventBase & {
+  type: 'meeting_transcription_failed';
+  meetingId: string;
+  message: string;
 };
 
 export type AudioPermissionChangedEvent = EventBase & {
@@ -193,15 +277,20 @@ export type AudioTranscriptGeneratedEvent = EventBase & {
   transcript: AudioTranscriptView;
 };
 
-export type MeetingSummaryGeneratedEvent = EventBase & {
-  type: 'meeting_summary_generated';
-  meetingId: string;
-  recordingId: string | null;
-  generatedAt: string;
-  title: string;
-  summary: string;
-  actionItems: string[];
-};
+export type MeetingSummaryGeneratedEvent =
+  | (EventBase & {
+      type: 'meeting_summary_generated';
+      meetingId: string;
+      recordingId: string | null;
+      generatedAt: string;
+      title: string;
+      summary: string;
+      actionItems: string[];
+    })
+  | (EventBase & {
+      type: 'meeting_summary_generated';
+      summary: MeetingSummary;
+    });
 
 export type TaskDecisionRecordedEvent = EventBase & {
   type: 'task_decision_recorded';
@@ -316,6 +405,7 @@ export type DomainEvent =
   | TaskPlanRevisedEvent
   | TaskPlanRevisionFailedEvent
   | UserBlockNotesEditedEvent
+  | UserBlockCorrectedEvent
   | CalendarItemCreatedEvent
   | CalendarItemUpdatedEvent
   | CalendarItemDeletedEvent
@@ -323,6 +413,17 @@ export type DomainEvent =
   | MeetingPromptShownEvent
   | MeetingPromptDismissedEvent
   | MeetingEndedEvent
+  | ProactiveInsightGeneratedEvent
+  | ProactiveInsightDismissedEvent
+  | ProactiveInsightSnoozedEvent
+  | ProactiveInsightActionedEvent
+  | MeetingDetectedEvent
+  | MeetingDetectionDismissedEvent
+  | MeetingTranscriptionStartedEvent
+  | MeetingAudioChunkCapturedEvent
+  | MeetingTranscriptChunkAddedEvent
+  | MeetingTranscriptionStoppedEvent
+  | MeetingTranscriptionFailedEvent
   | AudioPermissionChangedEvent
   | AudioRecordingStartedEvent
   | AudioRecordingPausedEvent
@@ -391,6 +492,18 @@ export type MeetingSummaryView = {
   actionItems: string[];
 };
 
+export type UserBlockCorrectionView = {
+  blockId: string;
+  notesKey?: string;
+  title?: string;
+  category?: string;
+  markedWrong?: boolean;
+  feedback?: string;
+  mergeWithBlockId?: string;
+  splitAt?: string;
+  editedAt: string;
+};
+
 export type TimelineView = {
   sessionsById: Record<string, SessionView>;
   sessionOrder: string[];
@@ -427,6 +540,19 @@ export type TimelineView = {
     string,
     {notes: string; editedAt: string; lastBlockId: string | null}
   >;
+  userBlockCorrections: Record<string, UserBlockCorrectionView>;
+  proactiveInsightsById: Record<string, ProactiveInsightView>;
+  proactiveInsightOrder: string[];
+  meetingDetectionsById: Record<string, MeetingDetection>;
+  meetingDetectionOrder: string[];
+  dismissedMeetingDetectionIds: Record<
+    string,
+    {dedupeKey: string; dismissedAt: string}
+  >;
+  meetingRecordingsById: Record<string, MeetingRecording>;
+  meetingRecordingOrder: string[];
+  meetingTranscriptChunksByMeetingId: Record<string, MeetingTranscriptChunk[]>;
+  meetingSummariesByMeetingId: Record<string, MeetingSummary>;
   calendarItemsById: Record<string, UserCalendarItem>;
   calendarItemOrder: string[];
   currentSessionId: string | null;
@@ -483,6 +609,16 @@ export function createEmptyTimeline(): TimelineView {
     planSnapshots: [],
     lastPlanRevisionFailure: null,
     userBlockNotes: {},
+    userBlockCorrections: {},
+    proactiveInsightsById: {},
+    proactiveInsightOrder: [],
+    meetingDetectionsById: {},
+    meetingDetectionOrder: [],
+    dismissedMeetingDetectionIds: {},
+    meetingRecordingsById: {},
+    meetingRecordingOrder: [],
+    meetingTranscriptChunksByMeetingId: {},
+    meetingSummariesByMeetingId: {},
     calendarItemsById: {},
     calendarItemOrder: [],
     currentSessionId: null,
@@ -579,6 +715,25 @@ function cloneTimeline(timeline: TimelineView): TimelineView {
         : {...timeline.latestAudioPermissionStatus},
     planSnapshots: timeline.planSnapshots.slice(),
     userBlockNotes: {...timeline.userBlockNotes},
+    userBlockCorrections: {...timeline.userBlockCorrections},
+    proactiveInsightsById: {...timeline.proactiveInsightsById},
+    proactiveInsightOrder: timeline.proactiveInsightOrder.slice(),
+    meetingDetectionsById: {...timeline.meetingDetectionsById},
+    meetingDetectionOrder: timeline.meetingDetectionOrder.slice(),
+    dismissedMeetingDetectionIds: {
+      ...timeline.dismissedMeetingDetectionIds,
+    },
+    meetingRecordingsById: {...timeline.meetingRecordingsById},
+    meetingRecordingOrder: timeline.meetingRecordingOrder.slice(),
+    meetingTranscriptChunksByMeetingId: Object.fromEntries(
+      Object.entries(timeline.meetingTranscriptChunksByMeetingId).map(
+        ([meetingId, chunks]) => [
+          meetingId,
+          chunks.map(chunk => ({...chunk})),
+        ],
+      ),
+    ),
+    meetingSummariesByMeetingId: {...timeline.meetingSummariesByMeetingId},
     calendarItemsById: Object.fromEntries(
       Object.entries(timeline.calendarItemsById).map(([id, item]) => [
         id,
@@ -865,6 +1020,92 @@ export function applyEventInPlace(timeline: TimelineView, event: DomainEvent) {
       break;
     }
 
+    case 'user_block_corrected': {
+      const correctionKey = event.notesKey ?? event.blockId;
+      if (correctionKey.length === 0) break;
+      const previous = timeline.userBlockCorrections[correctionKey];
+      const next: UserBlockCorrectionView = {
+        blockId: event.blockId,
+        notesKey: event.notesKey,
+        title: event.title != null ? event.title.trim() : previous?.title,
+        category:
+          event.category != null ? event.category.trim() : previous?.category,
+        markedWrong: event.markedWrong ?? previous?.markedWrong,
+        feedback:
+          event.feedback != null ? event.feedback.trim() : previous?.feedback,
+        mergeWithBlockId:
+          event.mergeWithBlockId != null
+            ? event.mergeWithBlockId.trim()
+            : previous?.mergeWithBlockId,
+        splitAt:
+          event.splitAt != null ? event.splitAt.trim() : previous?.splitAt,
+        editedAt: event.occurredAt,
+      };
+      if (next.title != null && next.title.length === 0) {
+        delete next.title;
+      }
+      if (next.category != null && next.category.length === 0) {
+        delete next.category;
+      }
+      if (next.feedback != null && next.feedback.length === 0) {
+        delete next.feedback;
+      }
+      if (next.mergeWithBlockId != null && next.mergeWithBlockId.length === 0) {
+        delete next.mergeWithBlockId;
+      }
+      if (next.splitAt != null && next.splitAt.length === 0) {
+        delete next.splitAt;
+      }
+      timeline.userBlockCorrections[correctionKey] = next;
+      break;
+    }
+
+    case 'proactive_insight_generated': {
+      const previous = timeline.proactiveInsightsById[event.insight.id];
+      timeline.proactiveInsightsById[event.insight.id] = {
+        ...event.insight,
+        status: previous?.status ?? 'active',
+        dismissedAt: previous?.dismissedAt,
+        snoozedUntil: previous?.snoozedUntil,
+        actionedAt: previous?.actionedAt,
+        lastActionId: previous?.lastActionId,
+      };
+      if (!timeline.proactiveInsightOrder.includes(event.insight.id)) {
+        timeline.proactiveInsightOrder.push(event.insight.id);
+      }
+      break;
+    }
+
+    case 'proactive_insight_dismissed': {
+      const insight = timeline.proactiveInsightsById[event.insightId];
+      if (insight != null) {
+        insight.status = 'dismissed';
+        insight.dismissedAt = event.occurredAt;
+        delete insight.snoozedUntil;
+      }
+      break;
+    }
+
+    case 'proactive_insight_snoozed': {
+      const insight = timeline.proactiveInsightsById[event.insightId];
+      if (insight != null) {
+        insight.status = 'snoozed';
+        insight.snoozedUntil = event.snoozedUntil;
+      }
+      break;
+    }
+
+    case 'proactive_insight_actioned': {
+      const insight = timeline.proactiveInsightsById[event.insightId];
+      if (insight != null) {
+        insight.status = 'dismissed';
+        insight.actionedAt = event.occurredAt;
+        insight.lastActionId = event.actionId;
+        delete insight.snoozedUntil;
+      }
+      break;
+    }
+
     case 'calendar_item_created': {
       timeline.calendarItemsById[event.item.id] = {
         ...event.item,
@@ -911,6 +1152,72 @@ export function applyEventInPlace(timeline: TimelineView, event: DomainEvent) {
           deletedAt: event.occurredAt,
           updatedAt: event.occurredAt,
         };
+      }
+      break;
+    }
+
+    case 'meeting_detected': {
+      timeline.meetingDetectionsById[event.detection.id] = event.detection;
+      if (!timeline.meetingDetectionOrder.includes(event.detection.id)) {
+        timeline.meetingDetectionOrder.push(event.detection.id);
+      }
+      break;
+    }
+
+    case 'meeting_detection_dismissed': {
+      timeline.dismissedMeetingDetectionIds[event.detectionId] = {
+        dedupeKey: event.dedupeKey,
+        dismissedAt: event.occurredAt,
+      };
+      break;
+    }
+
+    case 'meeting_transcription_started': {
+      timeline.meetingRecordingsById[event.recording.meetingId] = {
+        ...event.recording,
+      };
+      if (!timeline.meetingRecordingOrder.includes(event.recording.meetingId)) {
+        timeline.meetingRecordingOrder.push(event.recording.meetingId);
+      }
+      break;
+    }
+
+    case 'meeting_audio_chunk_captured': {
+      const recording =
+        timeline.meetingRecordingsById[event.chunk.meetingId] ?? null;
+      if (recording != null && recording.status === 'starting') {
+        recording.status = 'recording';
+      }
+      break;
+    }
+
+    case 'meeting_transcript_chunk_added': {
+      const chunks =
+        timeline.meetingTranscriptChunksByMeetingId[event.chunk.meetingId] ??
+        [];
+      if (!chunks.some(chunk => chunk.id === event.chunk.id)) {
+        chunks.push({...event.chunk});
+      }
+      timeline.meetingTranscriptChunksByMeetingId[event.chunk.meetingId] =
+        chunks;
+      break;
+    }
+
+    case 'meeting_transcription_stopped': {
+      const recording = timeline.meetingRecordingsById[event.meetingId];
+      if (recording != null) {
+        recording.stoppedAt = event.stoppedAt;
+        recording.status =
+          event.reason === 'completed' ? 'finalizing' : 'stopped';
+      }
+      break;
+    }
+
+    case 'meeting_transcription_failed': {
+      const recording = timeline.meetingRecordingsById[event.meetingId];
+      if (recording != null) {
+        recording.status = 'failed';
+        recording.errorMessage = event.message;
       }
       break;
     }
@@ -1075,14 +1382,29 @@ export function applyEventInPlace(timeline: TimelineView, event: DomainEvent) {
     }
 
     case 'meeting_summary_generated': {
-      timeline.meetingSummariesById[event.meetingId] = {
-        meetingId: event.meetingId,
-        recordingId: event.recordingId,
-        generatedAt: event.generatedAt,
-        title: event.title,
-        summary: event.summary,
-        actionItems: event.actionItems.slice(),
-      };
+      if (typeof event.summary === 'object') {
+        const summary = event.summary;
+        timeline.meetingSummariesByMeetingId[summary.meetingId] = {
+          ...summary,
+        };
+        const recording = timeline.meetingRecordingsById[summary.meetingId] ?? null;
+        if (recording != null) {
+          recording.status = 'stopped';
+        }
+      } else {
+        const summaryEvent = event as Extract<
+          MeetingSummaryGeneratedEvent,
+          {summary: string}
+        >;
+        timeline.meetingSummariesById[summaryEvent.meetingId] = {
+          meetingId: summaryEvent.meetingId,
+          recordingId: summaryEvent.recordingId,
+          generatedAt: summaryEvent.generatedAt,
+          title: summaryEvent.title,
+          summary: summaryEvent.summary,
+          actionItems: summaryEvent.actionItems.slice(),
+        };
+      }
       break;
     }
 

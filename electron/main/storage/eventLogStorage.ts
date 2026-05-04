@@ -4,6 +4,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 
 import type { DomainEvent } from '../../../src/timeline/eventLog';
+import { getAppDataDirectoryPath } from '../appProfile';
 
 export type PersistedEventLogPayload = {
   eventLog: DomainEvent[];
@@ -18,7 +19,7 @@ export type SaveEventLogResult = {
 let saveEventLogQueue: Promise<void> = Promise.resolve();
 
 export function getEventLogDirectoryPath(): string {
-  return path.join(app.getPath('appData'), 'Flow');
+  return getAppDataDirectoryPath();
 }
 
 export function getEventLogFilePath(): string {
@@ -87,9 +88,10 @@ export async function loadEventLog(): Promise<PersistedEventLogPayload> {
 export async function saveEventLog(
   eventLog: DomainEvent[],
 ): Promise<SaveEventLogResult> {
+  const filePath = getEventLogFilePath();
   const serialized = JSON.stringify(eventLog, null, 2);
   const saveOperation = saveEventLogQueue.then(() =>
-    writeSerializedEventLog(serialized),
+    writeSerializedEventLog(filePath, serialized),
   );
   saveEventLogQueue = saveOperation.then(
     () => undefined,
@@ -99,11 +101,11 @@ export async function saveEventLog(
 }
 
 async function writeSerializedEventLog(
+  filePath: string,
   serialized: string,
 ): Promise<SaveEventLogResult> {
   await ensureEventLogDirectoryExists();
-  const filePath = getEventLogFilePath();
-  const temporaryPath = `${filePath}.${randomUUID()}.tmp`;
+  const temporaryPath = `${filePath}.${process.pid}.${randomUUID()}.tmp`;
 
   try {
     await fs.writeFile(temporaryPath, serialized, 'utf8');

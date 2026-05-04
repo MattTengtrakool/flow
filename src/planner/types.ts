@@ -1,4 +1,4 @@
-import type {ObservationActivityType} from '../observation/types';
+import type { ObservationActivityType } from '../observation/types';
 import type {
   WorklogCalendarBlock,
   WorklogLabel,
@@ -27,6 +27,8 @@ export type PlanBlock = {
   category: ObservationActivityType | 'other';
   confidence: number;
   keyActivities: string[];
+  nextActions?: string[];
+  calendarEventIds?: string[];
   artifacts: {
     apps: string[];
     repositories: string[];
@@ -44,7 +46,7 @@ export function computeBlockNotesKey(sourceObservationIds: string[]): string {
   return sourceObservationIds.slice().sort().join('|');
 }
 
-export type PlanUsageProvider = 'gemini' | 'anthropic';
+export type PlanUsageProvider = 'gemini' | 'anthropic' | 'managed';
 
 export type PlanUsage = {
   provider: PlanUsageProvider;
@@ -144,6 +146,8 @@ export function mapBlockToWorklogCalendarBlock(
     documents: block.artifacts.documents,
     reasonCodes: block.reasonCodes,
     keyActivities: block.keyActivities,
+    nextActions: block.nextActions,
+    calendarEventIds: block.calendarEventIds,
     category: block.category,
     people: block.artifacts.people,
     urls: block.artifacts.urls,
@@ -162,9 +166,7 @@ export function mapBlockToWorklogCalendarBlock(
   };
 }
 
-function flattenArtifacts(
-  artifacts: PlanBlock['artifacts'],
-): string[] {
+function flattenArtifacts(artifacts: PlanBlock['artifacts']): string[] {
   const combined = [
     ...artifacts.repositories,
     ...artifacts.tickets,
@@ -173,5 +175,7 @@ function flattenArtifacts(
     ...artifacts.apps,
     ...artifacts.people,
   ];
-  return Array.from(new Set(combined.filter(value => value.trim().length > 0))).slice(0, 12);
+  return Array.from(
+    new Set(combined.filter(value => value.trim().length > 0)),
+  ).slice(0, 12);
 }

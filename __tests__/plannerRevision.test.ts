@@ -341,6 +341,167 @@ describe('runPlannerRevision', () => {
     expect(result.snapshot.sessionId).toBe('session_old');
   });
 
+  test('passes user correction hints into the planner input', async () => {
+    const observations = [
+      makeObservation({ id: 'obs_1', observedAt: '2026-04-17T12:00:00.000Z' }),
+      makeObservation({ id: 'obs_2', observedAt: '2026-04-17T12:05:00.000Z' }),
+      makeObservation({ id: 'obs_3', observedAt: '2026-04-17T13:00:00.000Z' }),
+    ];
+    const priorSnapshot: TaskPlanSnapshot = {
+      snapshotId: 'snap_1',
+      revisedAt: '2026-04-17T12:10:00.000Z',
+      windowStartAt: '2026-04-17T06:10:00.000Z',
+      windowEndAt: '2026-04-17T12:10:00.000Z',
+      sessionId: 'session_1',
+      blocks: [
+        {
+          id: 'block_1',
+          startAt: '2026-04-17T12:00:00.000Z',
+          endAt: '2026-04-17T12:10:00.000Z',
+          headline: 'Old retry headline',
+          narrative: 'Old narrative.',
+          label: 'worked_on',
+          category: 'coding',
+          confidence: 0.8,
+          keyActivities: ['Edited retry.ts'],
+          artifacts: {
+            apps: ['Cursor'],
+            repositories: ['payments-service'],
+            urls: [],
+            tickets: ['PAY-193'],
+            documents: ['retry.ts'],
+            people: [],
+          },
+          reasonCodes: ['coding'],
+          sourceObservationIds: ['obs_1', 'obs_2'],
+        },
+      ],
+      model: 'test',
+      promptVersion: PLANNER_PROMPT_VERSION,
+      durationMs: 100,
+      inputObservationCount: 2,
+      inputClusterCount: 1,
+      previousSnapshotId: null,
+      cause: 'cadence',
+    };
+    const timeline = {
+      ...timelineWithObservations(observations, [priorSnapshot]),
+      userBlockCorrections: {
+        'obs_1|obs_2': {
+          blockId: 'block_1',
+          notesKey: 'obs_1|obs_2',
+          title: 'PAY-193 retry flow',
+          category: 'planning',
+          markedWrong: true,
+          feedback: 'This was planning work.',
+          editedAt: '2026-04-17T12:15:00.000Z',
+        },
+      },
+    };
+
+    const result = await runPlannerRevision({
+      timeline,
+      now,
+      cause: 'manual',
+      force: true,
+      windowMs: WINDOW_MS,
+      runReplan: async input => {
+        expect(input.correctionHints).toEqual([
+          {
+            blockId: 'block_1',
+            sourceObservationIds: ['obs_1', 'obs_2'],
+            title: 'PAY-193 retry flow',
+            category: 'planning',
+            markedWrong: true,
+            feedback: 'This was planning work.',
+          },
+        ]);
+        return {
+          model: 'stub-model',
+          promptVersion: PLANNER_PROMPT_VERSION,
+          durationMs: 100,
+          blocks: [],
+        };
+      },
+    });
+
+    expect(result.kind).toBe('success');
+  });
+
+  test('passes calendar context and preserves calendar links on blocks', async () => {
+    const observations = [
+      makeObservation({ id: 'obs_1', observedAt: '2026-04-17T13:00:00.000Z' }),
+    ];
+    const timeline = timelineWithObservations(observations);
+
+    const result = await runPlannerRevision({
+      timeline,
+      now,
+      cause: 'manual',
+      force: true,
+      windowMs: WINDOW_MS,
+      calendarContext: {
+        windowStartAt: '2026-04-17T08:00:00.000Z',
+        windowEndAt: '2026-04-17T14:00:00.000Z',
+        events: [
+          {
+            id: 'calendar_event_launch_sync',
+            title: 'Launch sync',
+            startTime: '2026-04-17T13:00:00.000Z',
+            endTime: '2026-04-17T13:30:00.000Z',
+            allDay: false,
+            busy: true,
+            eventType: 'default',
+            mode: 'scheduled',
+            sourceSummary: 'Primary',
+          },
+        ],
+      },
+      runReplan: async input => {
+        expect(input.calendarContext?.events[0].title).toBe('Launch sync');
+        return {
+          model: 'stub-model',
+          promptVersion: PLANNER_PROMPT_VERSION,
+          durationMs: 100,
+          blocks: [
+            {
+              startAt: '2026-04-17T13:00:00.000Z',
+              endAt: '2026-04-17T13:15:00.000Z',
+              headline: 'Launch sync',
+              narrative: 'Reviewed launch follow-ups from the meeting.',
+              notes: '- Reviewed **Launch sync** follow-ups',
+              label: 'reviewed' as const,
+              category: 'meeting' as const,
+              confidence: 0.82,
+              keyActivities: ['Reviewed launch follow-ups'],
+              nextActions: ['Send launch notes'],
+              calendarEventIds: ['calendar_event_launch_sync'],
+              artifacts: {
+                apps: ['Google Meet'],
+                repositories: [],
+                urls: [],
+                tickets: [],
+                documents: [],
+                people: [],
+              },
+              reasonCodes: ['calendar_overlap'],
+              sourceObservationIds: ['obs_1'],
+            },
+          ],
+        };
+      },
+    });
+
+    expect(result.kind).toBe('success');
+    if (result.kind !== 'success') return;
+    expect(result.snapshot.blocks[0].calendarEventIds).toEqual([
+      'calendar_event_launch_sync',
+    ]);
+    expect(result.snapshot.blocks[0].nextActions).toEqual([
+      'Send launch notes',
+    ]);
+  });
+
   test('emits a task_plan_revision_failed event when the engine throws', async () => {
     const observations = [
       makeObservation({id: 'obs_1', observedAt: '2026-04-17T13:00:00.000Z'}),

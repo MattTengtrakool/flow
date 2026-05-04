@@ -2,6 +2,7 @@
 #import <Foundation/Foundation.h>
 #import <ScreenCaptureKit/ScreenCaptureKit.h>
 #import <Speech/Speech.h>
+#include <string.h>
 
 static NSString *FlowTimestamp(void) {
   NSDateFormatter *formatter = [[NSDateFormatter alloc] init];
@@ -58,7 +59,9 @@ static NSDictionary *FlowPermissionPayload(void) {
   return @{
     @"microphone": FlowPermissionState(status),
     @"microphoneAccessGranted": @(granted),
+    @"microphoneGranted": @(granted),
     @"systemAudioCaptureAvailable": @(systemAudioAvailable),
+    @"screenCaptureGranted": @(systemAudioAvailable),
     @"checkedAt": FlowTimestamp(),
   };
 }
@@ -516,6 +519,31 @@ static void FlowTranscribe(NSDictionary *options) {
   });
 }
 
+static NSString *FlowValueForArg(int argc, const char *argv[], NSString *flag, NSString *fallback) {
+  const char *flagValue = flag.UTF8String;
+  for (int i = 2; i < argc - 1; i += 1) {
+    if (strcmp(argv[i], flagValue) == 0) {
+      return [NSString stringWithUTF8String:argv[i + 1]];
+    }
+  }
+  return fallback;
+}
+
+static void FlowRunChunkedCaptureScaffold(int argc, const char *argv[]) {
+  NSString *meetingId = FlowValueForArg(argc, argv, @"--meeting-id", @"meeting_unknown");
+  FlowWriteJSON(@{
+    @"type": @"audio_capture_started",
+    @"meetingId": meetingId,
+    @"startedAt": FlowTimestamp(),
+  });
+  // Future streaming builds should emit audio_chunk_ready lines every chunk interval.
+  FlowWriteJSON(@{
+    @"type": @"audio_capture_failed",
+    @"meetingId": meetingId,
+    @"message": @"Native meeting audio chunk streaming is not enabled in this build. Use the Flow recording controls for system or microphone capture.",
+  });
+}
+
 static void FlowRunRecording(NSDictionary *options) {
   NSString *outputPath = [options[@"outputPath"] isKindOfClass:NSString.class]
                              ? options[@"outputPath"]
@@ -627,6 +655,10 @@ int main(int argc, const char *argv[]) {
     if ([command isEqualToString:@"requestPermissions"]) {
       FlowRequestPermissions();
       return 0;
+    }
+    if ([command isEqualToString:@"start"]) {
+      FlowRunChunkedCaptureScaffold(argc, argv);
+      return 1;
     }
     if ([command isEqualToString:@"record"]) {
       FlowRunRecording(argc >= 3 ? FlowParseJSONArgument(argv[2]) : @{});
