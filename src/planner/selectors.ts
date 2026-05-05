@@ -7,7 +7,11 @@ import {
 } from '../timeline/eventLog';
 import type { WorklogCalendarBlock, WorklogDayView } from '../worklog/types';
 import { pruneOutlierObservationIds } from './revisionEngine';
-import { mapBlockToWorklogCalendarBlock, type PlanBlock } from './types';
+import {
+  computeBlockNotesKey,
+  mapBlockToWorklogCalendarBlock,
+  type PlanBlock,
+} from './types';
 import type { TaskSegmentView } from '../tasks/types';
 import { repairTaskTitle } from '../tasks/title';
 
@@ -16,6 +20,8 @@ const COVERAGE_GAP_MS = 3 * 60 * 1000;
 const MAX_STABLE_SCREEN_EXTENSION_MS = 30 * 60 * 1000;
 const MAX_ANCHORED_SINGLE_OBSERVATION_BLOCK_MS = 45 * 60 * 1000;
 const MIN_UNANCHORED_BLOCK_DISPLAY_MS = 3 * 60 * 1000;
+const MAX_RELATED_BLOCK_GAP_MS = 12 * 60 * 1000;
+const MAX_BRIEF_INTERRUPTION_MS = 2 * 60 * 1000;
 
 // Cache formatters by timezone — timezone changes are rare (effectively once per session)
 const dateKeyFormatters = new Map<string, Intl.DateTimeFormat>();
@@ -326,21 +332,305 @@ function mergePlannerAndTaskBlocks(
   planBlocks: WorklogCalendarBlock[],
   taskBlocks: WorklogCalendarBlock[],
 ): WorklogCalendarBlock[] {
-  if (planBlocks.length === 0) return taskBlocks;
-  if (taskBlocks.length === 0) return planBlocks;
+  const normalizedPlanBlocks = coalesceRelatedWorklogBlocks(planBlocks);
+  const normalizedTaskBlocks = coalesceRelatedWorklogBlocks(taskBlocks);
+  if (normalizedPlanBlocks.length === 0) return normalizedTaskBlocks;
+  if (normalizedTaskBlocks.length === 0) return normalizedPlanBlocks;
 
-  const retainedPlanBlocks = planBlocks.filter(
-    block => !isWeakPlannerDuplicateOfTask(block, taskBlocks),
+  const retainedPlanBlocks = normalizedPlanBlocks.filter(
+    block => !isWeakPlannerDuplicateOfTask(block, normalizedTaskBlocks),
   );
-  const retainedTaskBlocks = taskBlocks.filter(
+  const retainedTaskBlocks = normalizedTaskBlocks.filter(
     taskBlock =>
       !retainedPlanBlocks.some(planBlock =>
         blocksRepresentSameWork(planBlock, taskBlock),
       ),
   );
 
-  return [...retainedPlanBlocks, ...retainedTaskBlocks].sort(
-    compareWorklogBlocks,
+  return coalesceRelatedWorklogBlocks(
+    retainedPlanBlocks.concat(retainedTaskBlocks),
+  );
+}
+
+function coalesceRelatedWorklogBlocks(
+  blocks: WorklogCalendarBlock[],
+): WorklogCalendarBlock[] {
+  if (blocks.length <= 1) return blocks;
+  const sorted = blocks.slice().sort(compareWorklogBlocks);
+  const withoutBriefInterruptions = sorted.filter(
+    (block, index) =>
+      !isBriefInterruptionBetweenRelatedWork(sorted, index, block),
+  );
+  const merged: WorklogCalendarBlock[] = [];
+  for (const block of withoutBriefInterruptions) {
+    const previous = merged.at(-1);
+    if (
+      previous != null &&
+      shouldMergeSequentialWorklogBlocks(previous, block)
+    ) {
+      merged[merged.length - 1] = mergeWorklogBlockPair(previous, block);
+    } else {
+      merged.push(block);
+    }
+  }
+  return merged.sort(compareWorklogBlocks);
+}
+
+function isBriefInterruptionBetweenRelatedWork(
+  blocks: WorklogCalendarBlock[],
+  index: number,
+  block: WorklogCalendarBlock,
+): boolean {
+  if (!isBriefInterstitialBlock(block)) return false;
+  const previous = blocks[index - 1];
+  const next = blocks[index + 1];
+  if (previous == null || next == null) return false;
+  if (hasUserCorrection(previous) || hasUserCorrection(next)) return false;
+  if (!areRelatedWorklogBlocks(previous, next)) return false;
+  return gapBetweenBlocksMs(previous, next) <= MAX_RELATED_BLOCK_GAP_MS;
+}
+
+function isBriefInterstitialBlock(block: WorklogCalendarBlock): boolean {
+  if (block.source === 'user_calendar') return false;
+  if (hasUserCorrection(block)) return false;
+  if (blockDurationMs(block) > MAX_BRIEF_INTERRUPTION_MS) return false;
+  if (hasStrongTaskAnchor(block)) return false;
+  return (
+    block.category === 'browsing' ||
+    block.category === 'other' ||
+    block.category === 'communication'
+  );
+}
+
+function shouldMergeSequentialWorklogBlocks(
+  previous: WorklogCalendarBlock,
+  next: WorklogCalendarBlock,
+): boolean {
+  if (previous.source === 'user_calendar' || next.source === 'user_calendar') {
+    return false;
+  }
+  if (hasUserCorrection(previous) || hasUserCorrection(next)) return false;
+  if (gapBetweenBlocksMs(previous, next) > MAX_RELATED_BLOCK_GAP_MS) {
+    return false;
+  }
+  return areRelatedWorklogBlocks(previous, next);
+}
+
+function areRelatedWorklogBlocks(
+  a: WorklogCalendarBlock,
+  b: WorklogCalendarBlock,
+): boolean {
+  if (sharedValue(a.tickets, b.tickets) != null) return true;
+  if (sharedValue(a.calendarEventIds ?? [], b.calendarEventIds ?? []) != null) {
+    return true;
+  }
+  if (
+    sharedValue(normalizedDocuments(a), normalizedDocuments(b)) != null &&
+    relatedCategories(a, b)
+  ) {
+    return true;
+  }
+
+  const sharedRepo = sharedValue(a.repos, b.repos);
+  const hasTitleOverlap = hasDistinctiveTitleTokenOverlap(a, b);
+  if (sharedRepo != null && hasTitleOverlap) return true;
+  return hasTitleOverlap && relatedCategories(a, b);
+}
+
+function relatedCategories(
+  a: WorklogCalendarBlock,
+  b: WorklogCalendarBlock,
+): boolean {
+  if (a.category == null || b.category == null) return true;
+  if (a.category === b.category) return true;
+  const workCategories = new Set(['coding', 'review', 'research', 'planning']);
+  return workCategories.has(a.category) && workCategories.has(b.category);
+}
+
+function hasDistinctiveTitleTokenOverlap(
+  a: WorklogCalendarBlock,
+  b: WorklogCalendarBlock,
+): boolean {
+  const left = new Set(distinctiveTitleTokens(a.title));
+  if (left.size === 0) return false;
+  return distinctiveTitleTokens(b.title).some(token => left.has(token));
+}
+
+function distinctiveTitleTokens(value: string): string[] {
+  return value
+    .toLowerCase()
+    .split(/[^a-z0-9#-]+/)
+    .map(token => token.trim())
+    .filter(
+      token =>
+        token.length > 0 &&
+        !GENERIC_TITLE_TOKENS.has(token) &&
+        (token.length >= 5 || /[#0-9-]/.test(token)),
+    );
+}
+
+const GENERIC_TITLE_TOKENS = new Set([
+  'support',
+  'development',
+  'implementation',
+  'platform',
+  'function',
+  'search',
+  'results',
+  'review',
+  'meeting',
+  'update',
+  'updates',
+  'remapping',
+]);
+
+function mergeWorklogBlockPair(
+  a: WorklogCalendarBlock,
+  b: WorklogCalendarBlock,
+): WorklogCalendarBlock {
+  const sourceObservationIds = uniqueValues(
+    a.summary.provenance.supportedByObservationIds.concat(
+      b.summary.provenance.supportedByObservationIds,
+    ),
+  );
+  const title = chooseMergedTitle(a, b);
+  const notesKey =
+    sourceObservationIds.length > 0
+      ? computeBlockNotesKey(sourceObservationIds)
+      : a.notesKey ?? b.notesKey;
+
+  return {
+    ...a,
+    id: `${a.id}__merged__${b.id}`,
+    lineageId: a.lineageId,
+    segmentIds: uniqueValues(a.segmentIds.concat(b.segmentIds)),
+    startTime: a.startTime <= b.startTime ? a.startTime : b.startTime,
+    endTime: a.endTime >= b.endTime ? a.endTime : b.endTime,
+    label: b.label === 'confirmed_completed' ? b.label : a.label,
+    confidence: Math.min(a.confidence, b.confidence),
+    title,
+    summary: {
+      headline: title,
+      narrative: combineNarratives(a.summary.narrative, b.summary.narrative),
+      provenance: {
+        supportedByObservationIds: sourceObservationIds,
+        supportedByEvidenceIds: uniqueValues(
+          a.summary.provenance.supportedByEvidenceIds.concat(
+            b.summary.provenance.supportedByEvidenceIds,
+          ),
+        ),
+        keyArtifacts: uniqueValues(
+          a.summary.provenance.keyArtifacts.concat(
+            b.summary.provenance.keyArtifacts,
+          ),
+        ).slice(0, 12),
+        reasonCodes: uniqueValues(
+          a.summary.provenance.reasonCodes.concat(
+            b.summary.provenance.reasonCodes,
+            ['read_side_related_block_merge'],
+          ),
+        ),
+      },
+    },
+    apps: uniqueValues(a.apps.concat(b.apps)),
+    repos: uniqueValues(a.repos.concat(b.repos)),
+    tickets: uniqueValues(a.tickets.concat(b.tickets)),
+    documents: uniqueValues(a.documents.concat(b.documents)),
+    reasonCodes: uniqueValues(
+      a.reasonCodes.concat(b.reasonCodes, ['read_side_related_block_merge']),
+    ),
+    keyActivities: uniqueValues(
+      (a.keyActivities ?? []).concat(b.keyActivities ?? []),
+    ).slice(-6),
+    nextActions: uniqueValues(
+      (a.nextActions ?? []).concat(b.nextActions ?? []),
+    ),
+    calendarEventIds: uniqueValues(
+      (a.calendarEventIds ?? []).concat(b.calendarEventIds ?? []),
+    ),
+    people: uniqueValues((a.people ?? []).concat(b.people ?? [])),
+    urls: uniqueValues((a.urls ?? []).concat(b.urls ?? [])),
+    notes: combineOptionalText(a.notes, b.notes),
+    notesKey,
+    source: a.source === b.source ? a.source : a.source ?? b.source,
+    continuityLinkage: {
+      resumedFromLineageId:
+        a.continuityLinkage.resumedFromLineageId ??
+        b.continuityLinkage.resumedFromLineageId,
+      resumedSegmentCount: Math.max(
+        a.continuityLinkage.resumedSegmentCount,
+        b.continuityLinkage.resumedSegmentCount,
+      ),
+    },
+    debug: {
+      decisionModes: uniqueValues(
+        a.debug.decisionModes.concat(b.debug.decisionModes),
+      ),
+      decisionCount: a.debug.decisionCount + b.debug.decisionCount,
+      retroAdjusted: a.debug.retroAdjusted || b.debug.retroAdjusted,
+    },
+  };
+}
+
+function chooseMergedTitle(
+  a: WorklogCalendarBlock,
+  b: WorklogCalendarBlock,
+): string {
+  const aDuration = blockDurationMs(a);
+  const bDuration = blockDurationMs(b);
+  if (bDuration > aDuration * 1.5) return b.title;
+  return a.title;
+}
+
+function combineNarratives(a: string, b: string): string {
+  if (a.trim().length === 0) return b;
+  if (b.trim().length === 0 || a === b) return a;
+  return `${a} ${b}`;
+}
+
+function combineOptionalText(
+  a: string | undefined,
+  b: string | undefined,
+): string | undefined {
+  const combined = combineNarratives(a ?? '', b ?? '').trim();
+  return combined.length > 0 ? combined : undefined;
+}
+
+function gapBetweenBlocksMs(
+  a: WorklogCalendarBlock,
+  b: WorklogCalendarBlock,
+): number {
+  return Math.max(0, Date.parse(b.startTime) - Date.parse(a.endTime));
+}
+
+function normalizedDocuments(block: WorklogCalendarBlock): string[] {
+  return block.documents.map(document => {
+    const basename = document.split('/').pop() ?? document;
+    return basename.toLowerCase();
+  });
+}
+
+function hasUserCorrection(block: WorklogCalendarBlock): boolean {
+  return block.userCorrection != null;
+}
+
+function sharedValue(
+  a: readonly string[],
+  b: readonly string[],
+): string | null {
+  const left = new Set(
+    a.map(value => value.trim().toLowerCase()).filter(Boolean),
+  );
+  for (const value of b) {
+    const normalized = value.trim().toLowerCase();
+    if (left.has(normalized)) return normalized;
+  }
+  return null;
+}
+
+function uniqueValues(values: readonly string[]): string[] {
+  return Array.from(
+    new Set(values.map(value => value.trim()).filter(value => value.length > 0)),
   );
 }
 
@@ -757,6 +1047,9 @@ function isDisplayableWorklogBlock(block: WorklogCalendarBlock): boolean {
     0,
     Date.parse(block.endTime) - Date.parse(block.startTime),
   );
+  if (durationMs < MIN_UNANCHORED_BLOCK_DISPLAY_MS && !hasStrongTaskAnchor(block)) {
+    return false;
+  }
   if (durationMs >= MIN_UNANCHORED_BLOCK_DISPLAY_MS) return true;
   if (block.summary.provenance.supportedByObservationIds.length > 1) {
     return true;
@@ -792,6 +1085,15 @@ function hasTaskAnchor(block: WorklogCalendarBlock): boolean {
     block.tickets.length > 0 ||
     block.documents.length > 0 ||
     (block.urls?.length ?? 0) > 0 ||
+    (block.calendarEventIds?.length ?? 0) > 0
+  );
+}
+
+function hasStrongTaskAnchor(block: WorklogCalendarBlock): boolean {
+  return (
+    block.repos.length > 0 ||
+    block.tickets.length > 0 ||
+    block.documents.length > 0 ||
     (block.calendarEventIds?.length ?? 0) > 0
   );
 }

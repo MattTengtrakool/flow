@@ -882,4 +882,196 @@ describe('live task grouping regression coverage', () => {
       worklog.blocks[0].summary.provenance.supportedByObservationIds,
     ).toEqual(['obs_1', 'obs_2', 'obs_3', 'obs_4']);
   });
+
+  test('remerges related planner blocks across a brief browsing interruption', () => {
+    const makeStructured = (
+      summary: string,
+      taskHypothesis: string,
+      activityType: StructuredObservation['activityType'],
+      repos: string[] = [],
+      documents: string[] = [],
+      urls: string[] = [],
+    ): StructuredObservation => ({
+      ...baseObservation,
+      summary,
+      activityType,
+      taskHypothesis,
+      artifacts: documents,
+      entities: {
+        apps: activityType === 'browsing' ? ['Spotify'] : ['Cursor'],
+        documents,
+        tickets: [],
+        repos,
+        urls,
+        people: [],
+      },
+    });
+    const observations = [
+      {
+        id: 'obs_agent_1',
+        at: '2026-05-03T18:50:00.000Z',
+        structured: makeStructured(
+          'Troubleshot agent-1 phone number support in Cursor.',
+          'agent-1 phone number support',
+          'coding',
+          ['agent-1'],
+          ['schema.ts'],
+        ),
+      },
+      {
+        id: 'obs_agent_2',
+        at: '2026-05-03T18:59:00.000Z',
+        structured: makeStructured(
+          'Continued agent-1 phone number support debugging.',
+          'agent-1 phone number support',
+          'coding',
+          ['agent-1'],
+          ['quo.ts'],
+        ),
+      },
+      {
+        id: 'obs_hamilton',
+        at: '2026-05-03T19:08:00.000Z',
+        structured: makeStructured(
+          'Browsed Spotify Hamilton musical search results.',
+          'Hamilton musical search results',
+          'browsing',
+          [],
+          [],
+          ['https://open.spotify.com/search/hamilton'],
+        ),
+      },
+      {
+        id: 'obs_agent_3',
+        at: '2026-05-03T19:10:00.000Z',
+        structured: makeStructured(
+          'Adjusted agent-1 docker compose port remapping.',
+          'agent-1 docker-compose port remapping',
+          'coding',
+          ['agent-1'],
+          ['docker-compose.override.yml'],
+        ),
+      },
+    ];
+    const events: DomainEvent[] = [
+      {
+        id: 'event_session_start',
+        type: 'session_started',
+        sessionId: 'session_1',
+        title: 'Session 1',
+        occurredAt: '2026-05-03T18:50:00.000Z',
+      },
+      ...observations.map(
+        ({ id, at, structured }): DomainEvent => ({
+          id: `event_${id}`,
+          type: 'observation_added',
+          observationId: id,
+          sessionId: 'session_1',
+          text: structured.summary,
+          structured,
+          occurredAt: at,
+        }),
+      ),
+      {
+        id: 'event_plan',
+        type: 'task_plan_revised',
+        occurredAt: '2026-05-03T19:14:00.000Z',
+        snapshot: {
+          snapshotId: 'snapshot_1',
+          revisedAt: '2026-05-03T19:14:00.000Z',
+          windowStartAt: '2026-05-03T18:45:00.000Z',
+          windowEndAt: '2026-05-03T19:14:00.000Z',
+          sessionId: 'session_1',
+          blocks: [
+            {
+              id: 'plan_agent_phone',
+              startAt: '2026-05-03T18:50:00.000Z',
+              endAt: '2026-05-03T19:01:00.000Z',
+              headline: 'agent-1 phone number support',
+              narrative: 'Debugged phone number support for agent-1.',
+              label: 'worked_on',
+              category: 'coding',
+              confidence: 0.82,
+              keyActivities: ['Debugged phone number lookup support.'],
+              artifacts: {
+                apps: ['Cursor'],
+                repositories: ['agent-1'],
+                urls: [],
+                tickets: [],
+                documents: ['schema.ts', 'quo.ts'],
+                people: [],
+              },
+              reasonCodes: ['planner_split'],
+              sourceObservationIds: ['obs_agent_1', 'obs_agent_2'],
+            },
+            {
+              id: 'plan_hamilton',
+              startAt: '2026-05-03T19:08:00.000Z',
+              endAt: '2026-05-03T19:09:00.000Z',
+              headline: 'Hamilton musical search results',
+              narrative: 'Browsed Spotify search results for Hamilton.',
+              label: 'worked_on',
+              category: 'browsing',
+              confidence: 0.74,
+              keyActivities: ['Browsed Spotify search results.'],
+              artifacts: {
+                apps: ['Spotify'],
+                repositories: [],
+                urls: ['https://open.spotify.com/search/hamilton'],
+                tickets: [],
+                documents: [],
+                people: [],
+              },
+              reasonCodes: ['brief_context_switch'],
+              sourceObservationIds: ['obs_hamilton'],
+            },
+            {
+              id: 'plan_agent_ports',
+              startAt: '2026-05-03T19:09:00.000Z',
+              endAt: '2026-05-03T19:13:00.000Z',
+              headline: 'agent-1 docker-compose port remapping',
+              narrative: 'Adjusted docker-compose port remapping for agent-1.',
+              label: 'worked_on',
+              category: 'coding',
+              confidence: 0.81,
+              keyActivities: ['Changed docker-compose port mapping.'],
+              artifacts: {
+                apps: ['Cursor'],
+                repositories: ['agent-1'],
+                urls: [],
+                tickets: [],
+                documents: ['docker-compose.override.yml'],
+                people: [],
+              },
+              reasonCodes: ['planner_split'],
+              sourceObservationIds: ['obs_agent_3'],
+            },
+          ],
+          model: 'test',
+          promptVersion: 'test',
+          durationMs: 1,
+          inputObservationCount: 4,
+          inputClusterCount: 3,
+          previousSnapshotId: null,
+          cause: 'manual',
+        },
+      },
+    ];
+
+    const timeline = replayEventLog(events);
+    const worklog = getDayWorklog(timeline, '2026-05-03', 'UTC');
+
+    expect(worklog.blocks).toHaveLength(1);
+    expect(worklog.blocks[0]).toMatchObject({
+      title: 'agent-1 phone number support',
+      repos: ['agent-1'],
+      documents: ['schema.ts', 'quo.ts', 'docker-compose.override.yml'],
+    });
+    expect(worklog.blocks[0].summary.provenance.reasonCodes).toContain(
+      'read_side_related_block_merge',
+    );
+    expect(worklog.blocks.map(block => block.title)).not.toContain(
+      'Hamilton musical search results',
+    );
+  });
 });
