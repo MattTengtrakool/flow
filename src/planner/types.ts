@@ -4,8 +4,17 @@ import type {
   WorklogLabel,
   WorklogTaskSummary,
 } from '../worklog/types';
+import { normalizeProjects, normalizeTasks } from '../workArtifacts';
 
 export const PLANNER_PROMPT_VERSION = '2026-04-17.planner.v1';
+
+export type PlannerObservationAssignment = {
+  taskKey?: string;
+  lineageKey?: string;
+  backgroundObservationIds?: string[];
+  assignmentReason?: string;
+  timeConfidence?: number;
+};
 
 export type PlanBlock = {
   id: string;
@@ -31,6 +40,8 @@ export type PlanBlock = {
   calendarEventIds?: string[];
   artifacts: {
     apps: string[];
+    projects?: string[];
+    tasks?: string[];
     repositories: string[];
     urls: string[];
     tickets: string[];
@@ -39,7 +50,7 @@ export type PlanBlock = {
   };
   reasonCodes: string[];
   sourceObservationIds: string[];
-};
+} & PlannerObservationAssignment;
 
 export function computeBlockNotesKey(sourceObservationIds: string[]): string {
   if (sourceObservationIds.length === 0) return '';
@@ -107,6 +118,8 @@ export type CondensedObservationEntry = {
   nextActions: string[];
   artifacts: {
     apps: string[];
+    projects?: string[];
+    tasks?: string[];
     repositories: string[];
     urls: string[];
     tickets: string[];
@@ -119,6 +132,8 @@ export type CondensedObservationEntry = {
 export function mapBlockToWorklogCalendarBlock(
   block: PlanBlock,
 ): WorklogCalendarBlock {
+  const projects = normalizeProjects(block.artifacts);
+  const tasks = normalizeTasks(block.artifacts);
   const summary: WorklogTaskSummary = {
     headline: block.headline,
     narrative: block.narrative,
@@ -126,7 +141,12 @@ export function mapBlockToWorklogCalendarBlock(
       supportedByObservationIds: block.sourceObservationIds,
       supportedByEvidenceIds: [],
       keyArtifacts: flattenArtifacts(block.artifacts),
-      reasonCodes: block.reasonCodes,
+      reasonCodes: [
+        ...block.reasonCodes,
+        ...(block.assignmentReason != null
+          ? [`assignment:${block.assignmentReason}`]
+          : []),
+      ],
     },
   };
 
@@ -141,6 +161,8 @@ export function mapBlockToWorklogCalendarBlock(
     title: block.headline,
     summary,
     apps: block.artifacts.apps,
+    projects,
+    tasks,
     repos: block.artifacts.repositories,
     tickets: block.artifacts.tickets,
     documents: block.artifacts.documents,
@@ -168,6 +190,8 @@ export function mapBlockToWorklogCalendarBlock(
 
 function flattenArtifacts(artifacts: PlanBlock['artifacts']): string[] {
   const combined = [
+    ...normalizeProjects(artifacts),
+    ...normalizeTasks(artifacts),
     ...artifacts.repositories,
     ...artifacts.tickets,
     ...artifacts.documents,

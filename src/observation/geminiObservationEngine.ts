@@ -12,6 +12,7 @@ import {
   STRUCTURED_OBSERVATION_JSON_SCHEMA,
   parseStructuredObservation,
 } from './schema';
+import { WORK_CATEGORY_OPTIONS } from '../workCategories';
 
 const DEFAULT_OBSERVATION_MODEL = 'gemini-2.5-flash-lite';
 
@@ -127,6 +128,10 @@ function buildObservationPrompt(input: ObservationEngineInput): string {
     .slice(-3)
     .map(observation => ({
       summary: redactSensitiveText(observation.summary),
+      visibleAction: redactSensitiveText(observation.visibleAction),
+      possibleObjective: redactSensitiveText(observation.possibleObjective),
+      possibleProject: redactSensitiveText(observation.possibleProject),
+      possibleTask: redactSensitiveText(observation.possibleTask),
       activityType: observation.activityType,
       taskHypothesis: redactSensitiveText(observation.taskHypothesis),
     }));
@@ -161,12 +166,28 @@ function buildObservationPrompt(input: ObservationEngineInput): string {
     'Do not invent hidden content. Use null or empty arrays when unsure.',
     'Confidence must be between 0 and 1.',
     'Sensitivity should reflect whether the visible content appears routine, somewhat sensitive, or highly sensitive.',
+    'Choose the most specific activityType. Do not use vague legacy labels like "review" or "coding"; use code_review, document_review, software_development, debugging, qa_testing, analysis, etc.',
+    `Suggested activity categories: ${WORK_CATEGORY_OPTIONS.map(option => `${option.value}=${option.description}`).join('; ')}. Custom user categories may also be valid if they appear in recent context.`,
     '',
-    'taskHypothesis: derive this FRESH from visible screen content (window titles, file names, UI elements, visible text).',
-    'Write taskHypothesis as a short noun phrase that names the work object, not an activity sentence.',
-    'Good taskHypothesis examples: "Salesforce OAuth scope issue", "Owner user LastName data issue", "Receive orders shipment details", "Flow CLAUDE.md", "$1B Milestone Launch Recap meeting".',
+    'Separate visible facts from task inference:',
+    '- visibleAction: what the user is visibly doing right now, as an action sentence.',
+    '- possibleObjective: the broader likely goal, if visible evidence supports one.',
+    '- possibleProject: the broad work container, such as client, account, campaign, product area, course, case, or repo.',
+    '- possibleTask: the concrete work item or deliverable, if visible. Use null when the screenshot is just context.',
+    '- taskHypothesis is a legacy compatibility field. Set it to possibleTask, then possibleObjective, then null. Do not make it more specific than the evidence.',
+    '',
+    'Entity extraction should work for any knowledge worker, not only engineers.',
+    'Use entities.projects for broad work containers such as clients, accounts, campaigns, launches, courses, cases, repos, or product areas.',
+    'Use entities.tasks for the concrete work item such as a named deliverable, ticket, issue, follow-up, candidate loop, invoice, deck, doc, PR, or meeting topic.',
+    'Do not treat mechanics as tasks: pushing commits, logging in, opening GitHub, checking localhost, switching branches, or reading a quick status update are usually evidence for the broader task.',
+    'Prefer the highest-level visible work object over raw artifact names. For example, use "POS integration status" or "Zeus authentication implementation" instead of "push", "github", "auth.ts", or "owner/agent".',
+    'Keep entities.repos and entities.tickets for engineering-specific evidence when visible; also mirror those values into projects/tasks when they identify the broader work.',
+    '',
+    'possibleTask / taskHypothesis: derive these FRESH from visible screen content (window titles, file names, UI elements, visible text).',
+    'Write possibleTask as a short noun phrase that names the work object, not an activity sentence.',
+    'Good taskHypothesis examples: "Salesforce OAuth scope issue", "Acme renewal plan", "Q2 launch deck", "Candidate interview loop", "Invoice reconciliation", "Flow CLAUDE.md", "$1B Milestone Launch Recap meeting".',
     'Bad taskHypothesis examples: "Troubleshooting a Salesforce integration error", "Investigating and resolving a data quality issue", "Completing the Receive orders task", "Joining a Zoom meeting".',
-    'Do not start taskHypothesis with a gerund or generic verb: Reviewing, Debugging, Troubleshooting, Investigating, Completing, Joining, Discussing, Working.',
+    'Do not start possibleTask/taskHypothesis with a gerund or generic verb: Reviewing, Debugging, Troubleshooting, Investigating, Completing, Joining, Discussing, Working.',
     'Put the activity mechanics in summary and nextAction; keep taskHypothesis as the stable noun title.',
     'Do NOT copy a previous taskHypothesis unless the current screenshot clearly shows the same specific work.',
     'If the screen shows a different app, document, or focus than the previous observations, write a NEW hypothesis.',

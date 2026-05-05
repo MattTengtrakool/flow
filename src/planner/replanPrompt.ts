@@ -1,5 +1,7 @@
 import type { ReplanInput } from './replanTypes';
 import type { CondensedObservationEntry, PlanBlock } from './types';
+import { normalizeProjects, normalizeTasks } from '../workArtifacts';
+import { mergeWorkCategoryOptions } from '../workCategories';
 
 type PromptPreviousBlock = {
   startAt: string;
@@ -12,6 +14,7 @@ type PromptPreviousBlock = {
 };
 
 export function buildReplanPrompt(input: ReplanInput): string {
+  const categoryOptions = mergeWorkCategoryOptions(input.customCategories);
   const prevBlocks: PromptPreviousBlock[] =
     input.previousSnapshot?.blocks.map(block => ({
       startAt: block.startAt,
@@ -37,20 +40,23 @@ export function buildReplanPrompt(input: ReplanInput): string {
     summaries: cluster.representativeSummaries,
     nextActions: cluster.nextActions,
     artifacts: cluster.artifacts,
+    sourceObservationIds: cluster.sourceObservationIds,
   }));
 
   const lines = [
     'You are building a personal task calendar from desktop observations.',
-    'Produce a list of time blocks covering the requested window.',
-    'Each block is ONE task the person was working on.',
+    'Produce a list of main tasks covering the requested window.',
+    'First identify the tasks, then assign observations to those tasks. The',
+    'final title and time range must be based on all assigned observations, not',
+    'the first observation that mentioned the task.',
     '',
     '═══════════════════════════════════════════════════',
     'THE #1 RULE: HEADLINES NAME TASKS, NOT ACTIVITIES.',
     '═══════════════════════════════════════════════════',
     '',
-    'A TASK is what the person was trying to accomplish - a specific feature,',
-    'ticket, PR, document, or meeting. An ACTIVITY is the mechanics of HOW',
-    '(reviewing, debugging, configuring, rebasing, refactoring, typing).',
+    'A TASK is what the person was trying to accomplish - a specific deliverable,',
+    'client/account item, campaign, document, meeting, ticket, or PR. An ACTIVITY',
+    'is the mechanics of HOW (reviewing, debugging, configuring, typing, replying).',
     'Headlines MUST name tasks. Activities go in the narrative, never the title.',
     '',
     'BAD HEADLINES (describe activity or are generic):',
@@ -63,6 +69,11 @@ export function buildReplanPrompt(input: ReplanInput): string {
     '  ✗ "Working on Launch"                       — generic',
     '',
     'GOOD HEADLINES (anchor on a specific thing):',
+    '  ✓ "Acme renewal plan"                         (client/project anchor)',
+    '  ✓ "Q2 launch deck"                            (deliverable anchor)',
+    '  ✓ "Candidate interview loop"                  (hiring task anchor)',
+    '  ✓ "Invoice reconciliation"                    (ops task anchor)',
+    '  ✓ "Brand campaign review"                     (marketing task anchor)',
     '  ✓ "PAY-193 retry flow"                         (ticket anchor)',
     '  ✓ "Pre-consultation form for launch portal"    (named feature)',
     '  ✓ "Brand dedup by viewer role (PR #34603)"     (named PR + intent)',
@@ -79,14 +90,15 @@ export function buildReplanPrompt(input: ReplanInput): string {
     '2. NEVER use "&" or "and" to join two activities. A block is ONE task.',
     '3. The headline MUST anchor on ONE identifier visible in the clusters.',
     '   Use this priority order:',
-    '     (a) Ticket ID from taskAnchors.tickets  (e.g. POS-2221, PAY-193)',
-    '     (b) PR reference from taskAnchors.prs   (e.g. #34619, PR #34603)',
+    '     (a) Explicit task name or task ID from taskAnchors.tasks',
+    '     (b) Project/client/campaign/account from taskAnchors.projects',
     '     (c) Named meeting (if activityType is meeting and a meeting title',
     '         is visible in summaries or hypothesis)',
-    '     (d) Specific feature or component name, inferred from the most',
+    '     (d) Named document, URL workspace, or deliverable visible in artifacts',
+    '     (e) Optional engineering anchors: ticket ID, PR reference, repo name',
+    '     (f) Specific feature or component name, inferred from the most',
     '         distinctive file in taskAnchors.files (e.g. "dedupeAssignmentsByBrand",',
     '         "pre-consultation form", "listBr role arrays")',
-    '     (e) Repo name from taskAnchors.repos if nothing else is specific',
     '4. NEVER use these words alone as a headline: "workflow", "workflows",',
     '   "environment", "config", "setup", "updates", "code", "changes", "work".',
     '5. 3 to 8 words max. Optionally one parenthetical with a PR or ticket ID.',
@@ -100,21 +112,40 @@ export function buildReplanPrompt(input: ReplanInput): string {
     '═══════════════════════════════════════════════════',
     '',
     '- At most 12 blocks total.',
+    '- Every task MUST include sourceClusterIds for evidence clusters and should',
+    '  assign all relevant source observations through those clusters.',
+    '- backgroundObservationIds are observations in the window that were visible',
+    '  but intentionally not part of any meaningful task block.',
+    '- taskKey should be stable across overlapping windows for the same task.',
+    '  Use a durable slug from project + task, not a timestamp.',
+    '- lineageKey should match taskKey unless this is clearly a new recurrence',
+    '  of the same named task after a meaningful gap.',
     '- If the person switches activity but stays on the same task (coded, then',
     '  reviewed the PR for the same task, then tested it) — ONE block.',
-    '- NEVER emit two adjacent blocks sharing the same ticket, PR, repo, or',
-    '  primary file. Merge them.',
+    '- Multiple tasks may overlap in time. If the person alternates between two',
+    '  meaningful workstreams, or one task is passive/reference material while',
+    '  another is active work, emit separate overlapping blocks with their own',
+    '  assigned observations.',
+    '- Optimize for a manager-readable worklog, not an audit trail. Small',
+    '  actions like opening a page, checking a status, pushing commits, reading',
+    '  a short message, or authenticating are evidence for a larger task, not',
+    '  usually standalone blocks.',
+    '- Do NOT create a standalone block under 10 minutes unless it has a clear',
+    '  independent outcome, named meeting, or explicit follow-up task. Attach',
+    '  brief bursts to the nearest related project/task within 15 minutes.',
+    '- NEVER emit two adjacent blocks sharing the same task, project, ticket,',
+    '  PR, repo, or primary file. Merge them.',
     '- Prefer 30-120 min blocks with rich narratives over many small ones.',
     '',
     'BUT — do NOT over-merge. Distinct work belongs in distinct blocks:',
     '',
-    '- If two clusters have DIFFERENT primary entities (different repos,',
-    '  different tickets, different files, different companies being',
+    '- If two clusters have DIFFERENT primary entities (different projects,',
+    '  tasks, files, companies being',
     '  researched, different meetings, different URL hosts) and neither',
     "  cluster references the other's entities, they are SEPARATE blocks.",
     '- Temporal proximity alone is NOT a reason to merge. Two things that',
     '  happened 3 minutes apart but are about different topics remain TWO',
-    '  blocks, not one.',
+    '  blocks, not one. They may overlap if observations support both.',
     '- Wrong example: a cluster about researching Cognition (Google searches,',
     '  cognition.ai, Wikipedia) + a cluster about authenticating to GitHub',
     '  Enterprise (logging in, 2FA, opening a PR) = TWO blocks, not one.',
@@ -123,7 +154,7 @@ export function buildReplanPrompt(input: ReplanInput): string {
     '  Cognition company" = TWO blocks. Same time window, different topics.',
     '- Right example: "Coding auth flow" + "Reviewing PR #34619 for that same',
     '  auth flow" + "Testing the login against staging" = ONE block, because',
-    '  they all anchor on the same feature/PR/ticket.',
+    '  they all anchor on the same feature/project/task/PR/ticket.',
     '',
     'TIME-SPAN RULES (critical):',
     '',
@@ -132,9 +163,13 @@ export function buildReplanPrompt(input: ReplanInput): string {
     '  observation. Do NOT extend a block past the last observation to fill',
     '  empty time — if there are no observations for 30 minutes, the person',
     '  was away from the desk, not still on the task.',
+    '- Overlapping blocks are valid. Do not shorten one task just to avoid',
+    '  overlap with another task; use assigned observations to justify each',
+    '  block boundary.',
     '- Minimum 10 min applies to tasks with continuous observation coverage.',
-    '  For short bursts (a quick 2-minute lookup), emit a short block with',
-    '  confidence ≥ 0.7, not a padded 10-minute block.',
+    '  For short bursts, first try to attach the observation to a neighboring',
+    '  project/task block. Only emit a short standalone block when it is clearly',
+    '  a separate completed task.',
     '- If a cluster has only 1-3 observations in a single minute, the block',
     '  is roughly that minute plus a small buffer — not 40 minutes.',
     '',
@@ -220,16 +255,33 @@ export function buildReplanPrompt(input: ReplanInput): string {
     '- nextActions: 0-3 concrete follow-up actions visible or strongly implied.',
     '- calendarEventIds: calendar context event ids that directly overlapped',
     '  or named this work. Empty array when no calendar event helped.',
-    '- artifacts: real work artifacts only. Ticket IDs in "tickets", repo',
-    '  names in "repositories", file paths in "documents", links in "urls".',
+    '- artifacts: real work artifacts only. Put broad work containers in',
+    '  "projects" and concrete work items in "tasks". Ticket IDs may also go',
+    '  in "tickets", repo names in "repositories", file paths in "documents",',
+    '  links in "urls".',
+    '- Avoid low-level artifacts in projects/tasks: "push", "commits",',
+    '  "github", localhost URLs, app names, branch names, and generic repo',
+    '  owner paths are usually supporting evidence, not the task.',
     '  NO window titles, app chrome, or breadcrumbs like "Owner.com | Launch".',
     '  Max 6 per list.',
     '- label: worked_on | reviewed | drafted | likely_completed | confirmed_completed.',
-    '- category: coding | research | review | writing | communication | planning |',
-    '  browsing | file_management | meeting | other.',
+    '- category: choose the most specific value from this list:',
+    `  ${categoryOptions.map(option => option.value).join(' | ')}.`,
+    '  Avoid vague legacy labels like "review" or "coding". Use code_review,',
+    '  document_review, software_development, debugging, analysis, etc.',
+    input.customCategories != null && input.customCategories.length > 0
+      ? `  User custom categories: ${input.customCategories
+          .map(option => `${option.value}=${option.label}`)
+          .join('; ')}.`
+      : '',
     '- confidence: 0.9 for a clearly-identified task, 0.7 with minor noise,',
     '  0.5 for mixed. Below 0.35 → omit the block.',
     '- reasonCodes: 1-4 short tags.',
+    '- taskKey: stable lowercase slug for the task across overlapping replans.',
+    '- lineageKey: stable lowercase slug for the ongoing workstream.',
+    '- assignmentReason: 1 sentence explaining why the assigned observations are one task.',
+    '- backgroundObservationIds: observations/clusters that should be ignored or treated as passive background.',
+    '- timeConfidence: 0-1 confidence in the start/end boundaries.',
     '- sourceClusterIds: every cluster.id that contributed. Only real ids.',
     '',
     'CALENDAR CONTEXT:',
@@ -281,6 +333,8 @@ const TICKET_PATTERN = /\b([A-Z][A-Z0-9]{1,9})-(\d{1,6})\b/g;
 const PR_PATTERN = /#(\d{2,7})\b|\bpull\/(\d{2,7})\b/gi;
 
 type ClusterAnchors = {
+  projects: string[];
+  tasks: string[];
   tickets: string[];
   prs: string[];
   files: string[];
@@ -329,6 +383,8 @@ function extractClusterAnchors(
   }
 
   return {
+    projects: normalizeProjects(cluster.artifacts).slice(0, 4),
+    tasks: normalizeTasks(cluster.artifacts).slice(0, 4),
     tickets: Array.from(tickets).slice(0, 4),
     prs: Array.from(prs).slice(0, 4),
     files: distinctiveFiles.slice(0, 4),

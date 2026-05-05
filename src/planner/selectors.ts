@@ -13,7 +13,9 @@ import {
   type PlanBlock,
 } from './types';
 import type { TaskSegmentView } from '../tasks/types';
+import { getObservationPossibleObjective } from '../observation/intent';
 import { repairTaskTitle } from '../tasks/title';
+import { normalizeProjects, normalizeTasks, uniqueWorkArtifacts } from '../workArtifacts';
 
 const READ_TIME_BLOCK_BUFFER_MS = 2 * 60 * 1000;
 const COVERAGE_GAP_MS = 3 * 60 * 1000;
@@ -22,6 +24,20 @@ const MAX_ANCHORED_SINGLE_OBSERVATION_BLOCK_MS = 45 * 60 * 1000;
 const MIN_UNANCHORED_BLOCK_DISPLAY_MS = 3 * 60 * 1000;
 const MAX_RELATED_BLOCK_GAP_MS = 12 * 60 * 1000;
 const MAX_BRIEF_INTERRUPTION_MS = 2 * 60 * 1000;
+
+function blockProjects(block: WorklogCalendarBlock): string[] {
+  return normalizeProjects({
+    projects: block.projects,
+    repos: block.repos,
+  });
+}
+
+function blockTasks(block: WorklogCalendarBlock): string[] {
+  return normalizeTasks({
+    tasks: block.tasks,
+    tickets: block.tickets,
+  });
+}
 
 // Cache formatters by timezone — timezone changes are rare (effectively once per session)
 const dateKeyFormatters = new Map<string, Intl.DateTimeFormat>();
@@ -154,7 +170,10 @@ function selectWorklogBlocksForDay(
     timezone,
     snapshotWindowMs,
   );
-  const taskBlocks = selectTaskBlocksForDay(timeline, targetDayKey, timezone);
+  const hasPlannerCoverage = planBlocks.length > 0;
+  const taskBlocks = hasPlannerCoverage
+    ? []
+    : selectTaskBlocksForDay(timeline, targetDayKey, timezone);
   return mergePlannerAndTaskBlocks(planBlocks, taskBlocks);
 }
 
@@ -420,7 +439,7 @@ function areRelatedWorklogBlocks(
   a: WorklogCalendarBlock,
   b: WorklogCalendarBlock,
 ): boolean {
-  if (sharedValue(a.tickets, b.tickets) != null) return true;
+  if (sharedValue(blockTasks(a), blockTasks(b)) != null) return true;
   if (sharedValue(a.calendarEventIds ?? [], b.calendarEventIds ?? []) != null) {
     return true;
   }
@@ -431,9 +450,9 @@ function areRelatedWorklogBlocks(
     return true;
   }
 
-  const sharedRepo = sharedValue(a.repos, b.repos);
+  const sharedProject = sharedValue(blockProjects(a), blockProjects(b));
   const hasTitleOverlap = hasDistinctiveTitleTokenOverlap(a, b);
-  if (sharedRepo != null && hasTitleOverlap) return true;
+  if (sharedProject != null && hasTitleOverlap) return true;
   return hasTitleOverlap && relatedCategories(a, b);
 }
 
@@ -443,7 +462,20 @@ function relatedCategories(
 ): boolean {
   if (a.category == null || b.category == null) return true;
   if (a.category === b.category) return true;
-  const workCategories = new Set(['coding', 'review', 'research', 'planning']);
+  const workCategories = new Set([
+    'coding',
+    'software_development',
+    'debugging',
+    'qa_testing',
+    'review',
+    'code_review',
+    'document_review',
+    'research',
+    'analysis',
+    'planning',
+    'planning_strategy',
+    'project_management',
+  ]);
   return workCategories.has(a.category) && workCategories.has(b.category);
 }
 
@@ -533,6 +565,8 @@ function mergeWorklogBlockPair(
       },
     },
     apps: uniqueValues(a.apps.concat(b.apps)),
+    projects: uniqueWorkArtifacts([blockProjects(a), blockProjects(b)]),
+    tasks: uniqueWorkArtifacts([blockTasks(a), blockTasks(b)]),
     repos: uniqueValues(a.repos.concat(b.repos)),
     tickets: uniqueValues(a.tickets.concat(b.tickets)),
     documents: uniqueValues(a.documents.concat(b.documents)),
@@ -753,6 +787,8 @@ function selectTaskBlocksForDay(
           keyActivities: block.keyActivities ?? [],
           artifacts: {
             apps: block.apps,
+            projects: blockProjects(block),
+            tasks: blockTasks(block),
             repositories: block.repos,
             urls: block.urls ?? [],
             tickets: block.tickets,
@@ -817,7 +853,9 @@ function mapTaskSegmentToWorklogBlock(
   const rawTitle =
     segment.finalTitle ??
     segment.liveTitle ??
-    observations.at(-1)?.structured?.taskHypothesis ??
+    (observations.at(-1)?.structured != null
+      ? getObservationPossibleObjective(observations.at(-1)!.structured!)
+      : null) ??
     'Working';
   const observationSummaries = observations
     .map(observation => observation.structured?.summary ?? observation.text)
@@ -825,6 +863,8 @@ function mapTaskSegmentToWorklogBlock(
   const title = repairTaskTitle({
     title: rawTitle,
     artifacts: {
+      projects: segment.entityMemory.projects,
+      tasks: segment.entityMemory.tasks,
       tickets: segment.entityMemory.ticketIds,
       repositories: segment.entityMemory.repos,
       documents: segment.entityMemory.documents,
@@ -871,6 +911,8 @@ function mapTaskSegmentToWorklogBlock(
       },
     },
     apps: segment.entityMemory.apps,
+    projects: segment.entityMemory.projects,
+    tasks: segment.entityMemory.tasks,
     repos: segment.entityMemory.repos,
     tickets: segment.entityMemory.ticketIds,
     documents: segment.entityMemory.documents,
@@ -904,6 +946,8 @@ function flattenTaskArtifacts(segment: TaskSegmentView): string[] {
   return Array.from(
     new Set(
       [
+        ...segment.entityMemory.projects,
+        ...(segment.entityMemory.tasks ?? []),
         ...segment.entityMemory.repos,
         ...segment.entityMemory.ticketIds,
         ...segment.entityMemory.documents,
@@ -1082,7 +1126,9 @@ function isFlowInternalStatusBlock(block: WorklogCalendarBlock): boolean {
 function hasTaskAnchor(block: WorklogCalendarBlock): boolean {
   return (
     block.repos.length > 0 ||
+    (block.projects?.length ?? 0) > 0 ||
     block.tickets.length > 0 ||
+    (block.tasks?.length ?? 0) > 0 ||
     block.documents.length > 0 ||
     (block.urls?.length ?? 0) > 0 ||
     (block.calendarEventIds?.length ?? 0) > 0
@@ -1092,7 +1138,9 @@ function hasTaskAnchor(block: WorklogCalendarBlock): boolean {
 function hasStrongTaskAnchor(block: WorklogCalendarBlock): boolean {
   return (
     block.repos.length > 0 ||
+    (block.projects?.length ?? 0) > 0 ||
     block.tickets.length > 0 ||
+    (block.tasks?.length ?? 0) > 0 ||
     block.documents.length > 0 ||
     (block.calendarEventIds?.length ?? 0) > 0
   );
@@ -1101,7 +1149,9 @@ function hasStrongTaskAnchor(block: WorklogCalendarBlock): boolean {
 function hasPlanBlockTaskAnchor(block: PlanBlock): boolean {
   return (
     block.artifacts.repositories.length > 0 ||
+    (block.artifacts.projects?.length ?? 0) > 0 ||
     block.artifacts.tickets.length > 0 ||
+    (block.artifacts.tasks?.length ?? 0) > 0 ||
     block.artifacts.documents.length > 0 ||
     block.artifacts.urls.length > 0 ||
     (block.calendarEventIds?.length ?? 0) > 0

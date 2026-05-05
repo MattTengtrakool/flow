@@ -12,6 +12,10 @@ const flowApi: FlowElectronApi = {
       ipcRenderer.invoke('flow:companion:setVisible', visible),
     setContentHeight: height =>
       ipcRenderer.invoke('flow:companion:setContentHeight', height),
+    setContentSize: size =>
+      ipcRenderer.invoke('flow:companion:setContentSize', size),
+    setMouseEventsIgnored: ignored =>
+      ipcRenderer.invoke('flow:companion:setMouseEventsIgnored', ignored),
   },
   storage: {
     loadEventLog: () => ipcRenderer.invoke('flow:storage:loadEventLog'),
@@ -51,22 +55,6 @@ const flowApi: FlowElectronApi = {
   },
   chat: {
     runTurn: args => ipcRenderer.invoke('flow:chat:runTurn', args),
-  },
-  audio: {
-    getPermissionsStatus: () =>
-      ipcRenderer.invoke('flow:audio:getPermissionsStatus'),
-    requestPermissions: () =>
-      ipcRenderer.invoke('flow:audio:requestPermissions'),
-    startRecording: args =>
-      ipcRenderer.invoke('flow:audio:startRecording', args),
-    pauseRecording: () => ipcRenderer.invoke('flow:audio:pauseRecording'),
-    resumeRecording: () => ipcRenderer.invoke('flow:audio:resumeRecording'),
-    stopRecording: () => ipcRenderer.invoke('flow:audio:stopRecording'),
-    deleteRecording: args =>
-      ipcRenderer.invoke('flow:audio:deleteRecording', args),
-  },
-  meeting: {
-    dismissPrompt: args => ipcRenderer.invoke('flow:meeting:dismissPrompt', args),
   },
   calendar: {
     getState: () => ipcRenderer.invoke('flow:calendar:getState'),
@@ -175,6 +163,8 @@ const flowApi: FlowElectronApi = {
   },
   timeline: {
     getState: () => ipcRenderer.invoke('flow:timeline:getState'),
+    getWorklogView: request =>
+      ipcRenderer.invoke('flow:timeline:getWorklogView', request),
     startSession: () => ipcRenderer.invoke('flow:timeline:startSession'),
     stopSession: () => ipcRenderer.invoke('flow:timeline:stopSession'),
     captureNow: () => ipcRenderer.invoke('flow:timeline:captureNow'),

@@ -7,7 +7,6 @@ import {
   Tray,
   ipcMain,
   nativeImage,
-  screen,
 } from 'electron';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
@@ -19,7 +18,6 @@ import {
   getCompanionWindowTitle,
 } from './appProfile';
 import { registerAiIpcHandlers } from './ai/aiService';
-import { registerAudioIpcHandlers } from './audio/audioService';
 import { registerCaptureIpcHandlers } from './capture/captureService';
 import {
   calendarService,
@@ -29,6 +27,7 @@ import { loadEventLog, saveEventLog } from './storage/eventLogStorage';
 import {
   companionInitialBounds,
   configureCompanionWindow,
+  resizeCompanionWindowToContent,
 } from './proactive/companionWindow';
 import {
   proactiveService,
@@ -46,13 +45,19 @@ import {
   registerTimelineIpcHandlers,
   timelineService,
 } from './timeline/timelineService';
+import {
+  clearMainWindow,
+  getMainWindow,
+  setMainWindow,
+  setMainWindowFactory,
+  showMainWindow,
+} from './windowRegistry';
 
 const isDev = process.env.ELECTRON_RENDERER_URL != null || !app.isPackaged;
 app.setName(getAppDisplayName());
 app.setPath('userData', getAppDataDirectoryPath());
 
 let tray: Tray | null = null;
-let mainWindow: BrowserWindow | null = null;
 let companionWindow: BrowserWindow | null = null;
 const FLOW_APP_ICON_PATH = 'brand/flow-icon-512.png';
 const FLOW_TRAY_ICON_PATH = 'brand/generated/flow-menubar@1x.png';
@@ -70,9 +75,8 @@ function rendererUrl(): string {
 }
 
 function createMainWindow() {
-  if (mainWindow != null && !mainWindow.isDestroyed()) {
-    return mainWindow;
-  }
+  const existing = getMainWindow();
+  if (existing != null) return existing;
   const window = new BrowserWindow({
     width: 1280,
     height: 860,
@@ -88,9 +92,9 @@ function createMainWindow() {
       sandbox: false,
     },
   });
-  mainWindow = window;
+  setMainWindow(window);
   window.on('closed', () => {
-    if (mainWindow === window) mainWindow = null;
+    clearMainWindow(window);
   });
 
   void window.loadURL(rendererUrl());
@@ -101,6 +105,8 @@ function createMainWindow() {
 
   return window;
 }
+
+setMainWindowFactory(createMainWindow);
 
 function createCompanionWindow() {
   const bounds = companionInitialBounds();
@@ -149,22 +155,16 @@ function createTray() {
   tray.setToolTip(getAppDisplayName());
   tray.setContextMenu(
     Menu.buildFromTemplate([
-          {
-            label: `Show ${getAppDisplayName()}`,
-            click() {
-              showMainWindow();
-            },
-          },
+      {
+        label: `Show ${getAppDisplayName()}`,
+        click() {
+          showMainWindow();
+        },
+      },
       { type: 'separator' },
       { role: 'quit' },
     ]),
   );
-}
-
-function showMainWindow() {
-  const window = createMainWindow();
-  window.show();
-  window.focus();
 }
 
 function setDockIcon() {
@@ -184,11 +184,27 @@ ipcMain.handle('flow:companion:setVisible', (_event, visible: boolean) => {
 });
 ipcMain.handle('flow:companion:setContentHeight', (_event, height: number) => {
   if (companionWindow == null || companionWindow.isDestroyed()) return;
-  const display = screen.getDisplayNearestPoint(screen.getCursorScreenPoint());
-  const maxHeight = Math.max(120, display.workArea.height - 36);
-  const nextHeight = Math.min(Math.max(Math.ceil(height), 96), maxHeight);
   const bounds = companionWindow.getBounds();
-  companionWindow.setBounds({...bounds, height: nextHeight}, false);
+  resizeCompanionWindowToContent(companionWindow, {
+    width: bounds.width,
+    height,
+  });
+});
+ipcMain.handle('flow:companion:setContentSize', (_event, size) => {
+  if (companionWindow == null || companionWindow.isDestroyed()) return;
+  if (
+    size == null ||
+    typeof size !== 'object' ||
+    typeof size.width !== 'number' ||
+    typeof size.height !== 'number'
+  ) {
+    return;
+  }
+  resizeCompanionWindowToContent(companionWindow, size);
+});
+ipcMain.handle('flow:companion:setMouseEventsIgnored', (_event, ignored) => {
+  if (companionWindow == null || companionWindow.isDestroyed()) return;
+  companionWindow.setIgnoreMouseEvents(Boolean(ignored), { forward: true });
 });
 ipcMain.handle('flow:storage:loadEventLog', () => loadEventLog());
 ipcMain.handle('flow:storage:saveEventLog', (_event, eventLog: unknown) => {
@@ -198,7 +214,6 @@ ipcMain.handle('flow:storage:saveEventLog', (_event, eventLog: unknown) => {
   return saveEventLog(eventLog);
 });
 registerCaptureIpcHandlers();
-registerAudioIpcHandlers();
 registerAiIpcHandlers();
 registerCalendarIpcHandlers();
 registerProactiveIpcHandlers();
@@ -222,7 +237,7 @@ app.whenReady().then(() => {
   createTray();
 
   app.on('activate', () => {
-    if (mainWindow == null || mainWindow.isDestroyed()) {
+    if (getMainWindow() == null) {
       createMainWindow();
     }
   });

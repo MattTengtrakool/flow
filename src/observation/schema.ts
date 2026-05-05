@@ -1,17 +1,17 @@
-import {
-  OBSERVATION_ACTIVITY_TYPES,
-  OBSERVATION_SENSITIVITY_LEVELS,
-  type StructuredObservation,
-} from './types';
+import { OBSERVATION_SENSITIVITY_LEVELS, type StructuredObservation } from './types';
 
 export const OBSERVATION_PROMPT_VERSION =
-  '2026-05-04.observation-ignore-flow-status.v1';
+  '2026-05-05.observation-intent-fields.v1';
 
 export const STRUCTURED_OBSERVATION_JSON_SCHEMA = {
   type: 'object',
   additionalProperties: false,
   required: [
     'summary',
+    'visibleAction',
+    'possibleObjective',
+    'possibleProject',
+    'possibleTask',
     'activityType',
     'taskHypothesis',
     'confidence',
@@ -29,7 +29,24 @@ export const STRUCTURED_OBSERVATION_JSON_SCHEMA = {
     },
     activityType: {
       type: 'string',
-      enum: [...OBSERVATION_ACTIVITY_TYPES],
+      minLength: 1,
+      maxLength: 80,
+    },
+    visibleAction: {
+      type: ['string', 'null'],
+      maxLength: 180,
+    },
+    possibleObjective: {
+      type: ['string', 'null'],
+      maxLength: 180,
+    },
+    possibleProject: {
+      type: ['string', 'null'],
+      maxLength: 120,
+    },
+    possibleTask: {
+      type: ['string', 'null'],
+      maxLength: 160,
     },
     taskHypothesis: {
       type: ['string', 'null'],
@@ -61,7 +78,16 @@ export const STRUCTURED_OBSERVATION_JSON_SCHEMA = {
     entities: {
       type: 'object',
       additionalProperties: false,
-      required: ['apps', 'documents', 'tickets', 'repos', 'urls', 'people'],
+      required: [
+        'apps',
+        'documents',
+        'projects',
+        'tasks',
+        'tickets',
+        'repos',
+        'urls',
+        'people',
+      ],
       properties: {
         apps: {
           type: 'array',
@@ -72,6 +98,16 @@ export const STRUCTURED_OBSERVATION_JSON_SCHEMA = {
           type: 'array',
           maxItems: 6,
           items: { type: 'string', minLength: 1, maxLength: 160 },
+        },
+        projects: {
+          type: 'array',
+          maxItems: 6,
+          items: { type: 'string', minLength: 1, maxLength: 120 },
+        },
+        tasks: {
+          type: 'array',
+          maxItems: 6,
+          items: { type: 'string', minLength: 1, maxLength: 120 },
         },
         tickets: {
           type: 'array',
@@ -129,15 +165,46 @@ export function isStructuredObservation(
 
   if (
     typeof candidate.activityType !== 'string' ||
-    !OBSERVATION_ACTIVITY_TYPES.includes(
-      candidate.activityType as (typeof OBSERVATION_ACTIVITY_TYPES)[number],
-    )
+    candidate.activityType.trim().length === 0
+  ) {
+    return false;
+  }
+
+  if (
+    candidate.visibleAction !== undefined &&
+    candidate.visibleAction !== null &&
+    typeof candidate.visibleAction !== 'string'
+  ) {
+    return false;
+  }
+
+  if (
+    candidate.possibleObjective !== undefined &&
+    candidate.possibleObjective !== null &&
+    typeof candidate.possibleObjective !== 'string'
+  ) {
+    return false;
+  }
+
+  if (
+    candidate.possibleProject !== undefined &&
+    candidate.possibleProject !== null &&
+    typeof candidate.possibleProject !== 'string'
+  ) {
+    return false;
+  }
+
+  if (
+    candidate.possibleTask !== undefined &&
+    candidate.possibleTask !== null &&
+    typeof candidate.possibleTask !== 'string'
   ) {
     return false;
   }
 
   if (
     candidate.taskHypothesis !== null &&
+    candidate.taskHypothesis !== undefined &&
     typeof candidate.taskHypothesis !== 'string'
   ) {
     return false;
@@ -187,6 +254,10 @@ export function isStructuredObservation(
   return (
     isStringArray(entityCandidate.apps) &&
     isStringArray(entityCandidate.documents) &&
+    (entityCandidate.projects === undefined ||
+      isStringArray(entityCandidate.projects)) &&
+    (entityCandidate.tasks === undefined ||
+      isStringArray(entityCandidate.tasks)) &&
     isStringArray(entityCandidate.tickets) &&
     isStringArray(entityCandidate.repos) &&
     isStringArray(entityCandidate.urls) &&

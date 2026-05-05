@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { startTransition, useCallback, useEffect, useMemo, useState } from 'react';
 
 import type {
   CalendarEventAnnotationPatch,
@@ -39,7 +39,11 @@ export function useCalendarState(flow: FlowElectronApi | undefined) {
 
   useEffect(() => {
     if (flow == null) return;
-    const subscription = flow.calendar.addStateListener(setState);
+    const subscription = flow.calendar.addStateListener(next => {
+      startTransition(() => {
+        setState(next);
+      });
+    });
     return () => subscription.remove();
   }, [flow]);
 

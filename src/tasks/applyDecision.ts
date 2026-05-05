@@ -6,7 +6,10 @@ import {
   type TaskPendingBufferedEvent,
   type TimelineView,
 } from '../timeline/eventLog';
+import { normalizeProjects, normalizeTasks } from '../workArtifacts';
+import { evidenceStateForDecision } from './evidence';
 import { mergeEntityMemory } from './features';
+import { getObservationPossibleObjective, getObservationPossibleTask } from '../observation/intent';
 import { repairTaskTitle } from './title';
 import {
   TASK_ENGINE_VERSION,
@@ -33,6 +36,7 @@ type ApplyTaskDecisionArgs = {
   } | null;
   errorReason?: string | null;
   forcedDecisionId?: string | null;
+  pendingBufferSeconds?: number;
 };
 
 function buildLiveTitle(
@@ -42,8 +46,12 @@ function buildLiveTitle(
   const structured = observation.structured;
   if (structured != null) {
     return repairTaskTitle({
-      title: structured.taskHypothesis,
+      title:
+        getObservationPossibleTask(structured) ??
+        getObservationPossibleObjective(structured),
       artifacts: {
+        projects: normalizeProjects(structured.entities),
+        tasks: normalizeTasks(structured.entities),
         tickets: structured.entities.tickets,
         repositories: structured.entities.repos,
         urls: structured.entities.urls,
@@ -66,17 +74,41 @@ function fallbackTitleForActivity(
 ): string {
   switch (activityType) {
     case 'coding':
+    case 'software_development':
       return 'Code task';
+    case 'debugging':
+      return 'Debugging task';
+    case 'qa_testing':
+      return 'Testing task';
     case 'research':
       return 'Research task';
     case 'review':
+    case 'code_review':
+    case 'document_review':
       return 'Review task';
     case 'writing':
       return 'Document task';
+    case 'analysis':
+      return 'Analysis task';
+    case 'learning':
+      return 'Learning task';
+    case 'design':
+      return 'Design task';
     case 'communication':
       return 'Communication thread';
     case 'planning':
+    case 'planning_strategy':
       return 'Planning task';
+    case 'project_management':
+      return 'Project coordination';
+    case 'sales_customer':
+      return 'Customer work';
+    case 'recruiting':
+      return 'Recruiting task';
+    case 'operations_admin':
+      return 'Operations task';
+    case 'finance':
+      return 'Finance task';
     case 'browsing':
       return 'Browser task';
     case 'file_management':
@@ -128,6 +160,7 @@ function createDecisionEvent(args: {
     usedLlm: args.usedLlm,
     candidateShortlist: args.candidateShortlist,
     featureSnapshot: args.featureSnapshot,
+    evidenceState: evidenceStateForDecision(args.selectedCandidate.decision),
     stale: false,
     errorReason: args.errorReason ?? null,
   };
@@ -163,6 +196,7 @@ export function buildTaskEventsForDecision(
     llmMetadata,
     errorReason,
     forcedDecisionId,
+    pendingBufferSeconds = 10 * 60,
   } = args;
 
   const events: DomainEvent[] = [];
@@ -512,7 +546,8 @@ export function buildTaskEventsForDecision(
         type: 'task_pending_buffered',
         pendingObservationId: observation.id,
         pendingObservationIds: [observation.id],
-        bufferedUntil: addSeconds(observation.observedAt, 120),
+        evidenceState: 'candidate_evidence',
+        bufferedUntil: addSeconds(observation.observedAt, pendingBufferSeconds),
         reasonCodes: selectedCandidate.reasonCodes,
         summary: buildLiveSummary(observation),
         actor: usedLlm ? 'llm' : 'system',

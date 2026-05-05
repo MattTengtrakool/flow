@@ -1,3 +1,5 @@
+import type { EvidenceAssignmentState } from './evidence';
+
 export const TASK_ENGINE_VERSION = '2026-05-04.hybrid-task-noun-titles.v1';
 
 export type TaskActor = 'system' | 'llm' | 'user';
@@ -32,6 +34,7 @@ export type TaskEntityMemory = {
   repos: string[];
   ticketIds: string[];
   projects: string[];
+  tasks?: string[];
   documents: string[];
   people: string[];
   urls: string[];
@@ -57,6 +60,8 @@ export type TaskFeatureSnapshot = {
   titleTokenSimilarity: number;
   recentObservationSummarySimilarity: number;
   recentObservationHypothesisSimilarity: number;
+  projectOverlap: number;
+  taskOverlap: number;
   repoOverlap: number;
   ticketOverlap: number;
   documentOverlap: number;
@@ -64,6 +69,8 @@ export type TaskFeatureSnapshot = {
   urlOverlap: number;
   appOverlapCount: number;
   totalEntityOverlap: number;
+  hasPrimaryEntityOverlap: boolean;
+  hasStrongEntityOverlap: boolean;
   sameEntityThread: boolean;
   workflowContinuityHint: boolean;
   semanticContinuityScore: number;
@@ -132,12 +139,14 @@ export type TaskDecisionView = {
   usedLlm: boolean;
   candidateShortlist: TaskCandidateSummary[];
   featureSnapshot: TaskFeatureSnapshot | null;
+  evidenceState?: EvidenceAssignmentState;
   stale: boolean;
   errorReason: string | null;
 };
 
 export type PendingObservationView = {
   observationId: string;
+  evidenceState?: EvidenceAssignmentState;
   bufferedAt: string;
   bufferedUntil: string | null;
   reasonCodes: string[];
@@ -204,6 +213,7 @@ export function createEmptyTaskEntityMemory(): TaskEntityMemory {
     repos: [],
     ticketIds: [],
     projects: [],
+    tasks: [],
     documents: [],
     people: [],
     urls: [],

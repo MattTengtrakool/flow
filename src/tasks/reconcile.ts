@@ -4,6 +4,7 @@ import {
   type DomainEvent,
   type TimelineView,
 } from '../timeline/eventLog';
+import { normalizeProjects, normalizeTasks } from '../workArtifacts';
 import { repairTaskTitle } from './title';
 import { TASK_ENGINE_VERSION, type TaskReconciliationResult } from './types';
 
@@ -40,6 +41,14 @@ function summarizeClosedLineage(timeline: TimelineView, lineageId: string) {
     .map(observation => observation.structured?.summary ?? observation.text)
     .filter(text => text.trim().length > 0)
     .slice(0, 6);
+  const projects = observations.flatMap(observation =>
+    observation.structured != null
+      ? normalizeProjects(observation.structured.entities)
+      : [],
+  );
+  const tasks = observations.flatMap(observation =>
+    observation.structured != null ? normalizeTasks(observation.structured.entities) : [],
+  );
   const repos = observations.flatMap(
     observation => observation.structured?.entities.repos ?? [],
   );
@@ -49,14 +58,16 @@ function summarizeClosedLineage(timeline: TimelineView, lineageId: string) {
   const documents = observations.flatMap(
     observation => observation.structured?.entities.documents ?? [],
   );
-  const commonTicket = mode(tickets);
-  const commonRepo = mode(repos);
+  const commonTask = mode(tasks);
+  const commonProject = mode(projects);
   const commonDocument = mode(documents);
   const rawFinalTitle =
-    (commonTicket != null && commonRepo != null
-      ? `${commonTicket} in ${commonRepo}`
-      : commonTicket != null
-      ? commonTicket
+    (commonTask != null && commonProject != null
+      ? `${commonTask} in ${commonProject}`
+      : commonTask != null
+      ? commonTask
+      : commonProject != null
+      ? commonProject
       : commonDocument != null
       ? commonDocument
       : lineage?.latestLiveTitle) ??
@@ -65,6 +76,8 @@ function summarizeClosedLineage(timeline: TimelineView, lineageId: string) {
   const finalTitle = repairTaskTitle({
     title: rawFinalTitle,
     artifacts: {
+      projects,
+      tasks,
       tickets,
       repositories: repos,
       documents,

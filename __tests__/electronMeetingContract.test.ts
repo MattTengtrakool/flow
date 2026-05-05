@@ -25,6 +25,17 @@ const nativeAudioHelperSourcePath = path.join(
   'native-audio',
   'FlowAudioCapture.mm',
 );
+const nativeAudioInfoPlistPath = path.join(
+  root,
+  'electron',
+  'native-audio',
+  'Info.plist',
+);
+const nativeAudioBuildScriptPath = path.join(
+  root,
+  'scripts',
+  'buildNativeAudio.sh',
+);
 const packageJsonPath = path.join(root, 'package.json');
 const managedAiClientSourcePath = path.join(
   root,
@@ -32,6 +43,13 @@ const managedAiClientSourcePath = path.join(
   'main',
   'ai',
   'managedAiClient.ts',
+);
+const companionSourcePath = path.join(
+  root,
+  'electron',
+  'renderer',
+  'components',
+  'Companion.tsx',
 );
 
 describe('Electron meeting assistant contract', () => {
@@ -80,15 +98,27 @@ describe('Electron meeting assistant contract', () => {
       nativeAudioClientSourcePath,
       'utf8',
     );
+    const nativeInfoPlist = fs.readFileSync(nativeAudioInfoPlistPath, 'utf8');
+    const nativeBuildScript = fs.readFileSync(nativeAudioBuildScriptPath, 'utf8');
     const packageJson = fs.readFileSync(packageJsonPath, 'utf8');
 
     expect(nativeAudioSource).toContain('ScreenCaptureKit/ScreenCaptureKit.h');
-    expect(nativeAudioSource).toContain('audio_capture_started');
-    expect(nativeAudioSource).toContain('audio_chunk_ready');
-    expect(nativeAudioSource).toContain('audio_capture_failed');
+    expect(nativeAudioSource).toContain('record');
+    expect(nativeAudioSource).toContain('requestPermissions');
+    expect(nativeAudioSource).not.toContain('FlowRunChunkedCaptureScaffold');
+    expect(nativeClientSource).toContain('audio_capture_started');
+    expect(nativeClientSource).toContain('audio_chunk_ready');
+    expect(nativeClientSource).toContain('audio_capture_failed');
+    expect(nativeClientSource).toContain('requestPermissions');
+    expect(nativeClientSource).toContain('microphoneStatus');
+    expect(nativeClientSource).toContain("if (sources.includes('system'))");
+    expect(nativeClientSource).toContain("if (sources.includes('microphone'))");
     expect(nativeClientSource).toContain('native-audio');
     expect(packageJson).toContain('native-audio:build');
     expect(packageJson).toContain('FlowAudioCapture');
+    expect(packageJson).toContain('FlowAudioCapture.app');
+    expect(nativeInfoPlist).toContain('com.flow.worklog.native-audio');
+    expect(nativeBuildScript).toContain('com.flow.worklog.native-audio');
   });
 
   test('adds managed transcription and meeting summary endpoints', () => {
@@ -98,5 +128,16 @@ describe('Electron meeting assistant contract', () => {
     expect(managedAiSource).toContain('summarizeManagedMeeting');
     expect(managedAiSource).toContain('/v1/audio/transcribe');
     expect(managedAiSource).toContain('/v1/meetings/summarize');
+  });
+
+  test('defaults companion meeting recording to both meeting audio and microphone', () => {
+    const companionSource = fs.readFileSync(companionSourcePath, 'utf8');
+
+    expect(companionSource).toContain("props.onStart(['system', 'microphone'])");
+    expect(companionSource).toContain('Record meeting');
+    expect(companionSource).toContain('Mic only');
+    expect(companionSource).toContain('Transcript notes will appear after you stop.');
+    expect(companionSource).not.toContain('Record mic');
+    expect(companionSource).not.toContain('so far');
   });
 });

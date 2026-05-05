@@ -1,6 +1,7 @@
 import { memo } from 'react';
 
 import type { WorklogCalendarBlock } from '../../../src/worklog/types';
+import { presentableWorkArtifacts } from '../../../src/workArtifacts';
 import { focusedMinutes } from '../dateUtils';
 
 const timeFormatter = new Intl.DateTimeFormat([], {
@@ -18,6 +19,14 @@ export const BlockCard = memo(function BlockCard(props: {
   const start = timeFormatter.format(new Date(block.startTime));
   const end = timeFormatter.format(new Date(block.endTime));
   const minutes = focusedMinutes([block]);
+  const chips = presentableWorkArtifacts({
+    projects: block.projects,
+    tasks: block.tasks,
+    repositories: block.repos,
+    tickets: block.tickets,
+    documents: block.documents,
+    urls: block.urls,
+  });
 
   return (
     <button
@@ -39,7 +48,7 @@ export const BlockCard = memo(function BlockCard(props: {
       <strong>{block.title}</strong>
       {!compact ? <span>{block.summary.narrative}</span> : null}
       <span className="chip-row">
-        {[...block.repos, ...block.tickets, ...(block.documents ?? [])]
+        {chips
           .slice(0, compact ? 2 : 5)
           .map(value => (
             <span key={value} className="chip">

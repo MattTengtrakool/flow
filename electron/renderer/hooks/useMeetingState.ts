@@ -1,6 +1,9 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { startTransition, useCallback, useEffect, useMemo, useState } from 'react';
 
-import type { MeetingRuntimeState } from '../../../src/meetings/types';
+import type {
+  MeetingAudioSource,
+  MeetingRuntimeState,
+} from '../../../src/meetings/types';
 import type { FlowElectronApi } from '../../shared/flowApi';
 
 const EMPTY_MEETING_STATE: MeetingRuntimeState = {
@@ -12,6 +15,7 @@ const EMPTY_MEETING_STATE: MeetingRuntimeState = {
     helperAvailable: false,
     screenCaptureGranted: null,
     microphoneGranted: null,
+    microphoneStatus: 'unknown',
   },
   transcriptionStatus: 'idle',
   transcriptProgress: {
@@ -30,15 +34,23 @@ export function useMeetingState(flow: FlowElectronApi | undefined) {
       .getState()
       .then(setState)
       .catch(() => {});
-    const subscription = flow.meetings.addStateListener(setState);
+    const subscription = flow.meetings.addStateListener(next => {
+      startTransition(() => {
+        setState(next);
+      });
+    });
     return () => subscription.remove();
   }, [flow]);
 
   const startTranscription = useCallback(
-    (detectionId: string | undefined, consentAccepted: boolean) => {
+    (
+      detectionId: string | undefined,
+      consentAccepted: boolean,
+      sources?: MeetingAudioSource[],
+    ) => {
       if (flow == null) return Promise.resolve(state);
       return flow.meetings
-        .startTranscription({ detectionId, consentAccepted })
+        .startTranscription({ detectionId, consentAccepted, sources })
         .then(next => {
           setState(next);
           return next;

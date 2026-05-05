@@ -1,5 +1,6 @@
 import {
   detectLikelyMeeting,
+  detectLikelyMeetingFromRecentSources,
   scoreMeetingContext,
 } from '../src/meetings/detection';
 import type { CalendarStatePayload } from '../src/calendar/types';
@@ -39,6 +40,83 @@ describe('meeting detection', () => {
 
     expect(result.score).toBeGreaterThanOrEqual(0.75);
     expect(result.reasons.join(' ')).toContain('Google Meet');
+  });
+
+  test('detects Chrome Meet recording titles even when bundle id is missing', () => {
+    const detection = detectLikelyMeeting({
+      context: context({
+        appName: 'Google Chrome',
+        bundleIdentifier: null,
+        windowTitle:
+          'Meet - bds-zhpv-nmq - Camera and microphone recording - Google Chrome',
+      }),
+      calendar: null,
+      now,
+    });
+
+    expect(detection).toMatchObject({
+      appName: 'Google Chrome',
+      confidence: 'likely',
+    });
+    expect(detection?.score).toBeGreaterThanOrEqual(0.75);
+  });
+
+  test('uses recent meeting source after Flow becomes foreground', () => {
+    const detection = detectLikelyMeetingFromRecentSources({
+      sources: [
+        {
+          context: context({
+            appName: 'Electron',
+            bundleIdentifier: null,
+            windowTitle: 'Flow',
+            recordedAt: '2026-05-02T16:59:59.000Z',
+          }),
+        },
+        {
+          context: context({
+            appName: 'Google Chrome',
+            bundleIdentifier: null,
+            windowTitle:
+              'Meet - bds-zhpv-nmq - Camera and microphone recording - Google Chrome',
+            recordedAt: '2026-05-02T16:59:45.000Z',
+          }),
+        },
+      ],
+      calendar: null,
+      now,
+      maxAgeMs: 60_000,
+    });
+
+    expect(detection?.windowTitle).toContain('Meet - bds-zhpv-nmq');
+  });
+
+  test('ignores stale recent-source meeting evidence', () => {
+    const detection = detectLikelyMeetingFromRecentSources({
+      sources: [
+        {
+          context: context({
+            appName: 'Google Chrome',
+            bundleIdentifier: null,
+            windowTitle:
+              'Meet - bds-zhpv-nmq - Camera and microphone recording - Google Chrome',
+            recordedAt: '2026-05-02T16:57:00.000Z',
+          }),
+        },
+        {
+          context: context({
+            appName: 'Google Chrome',
+            bundleIdentifier: null,
+            windowTitle: 'New Tab - Google Chrome',
+            recordedAt: '2026-05-02T16:59:59.000Z',
+          }),
+        },
+      ],
+      calendar: null,
+      now,
+      maxAgeMs: 60_000,
+    });
+
+    expect(detection).toBeNull();
   });
 
   test('suppresses dismissed meeting dedupe keys', () => {

@@ -11,6 +11,13 @@ import type {
   ExternalCalendarEventView,
 } from '../../../src/calendar/types';
 import type { WorklogCalendarBlock } from '../../../src/worklog/types';
+import {
+  mergeWorkCategoryOptions,
+  WORK_CATEGORY_OPTIONS,
+  categoryLabel,
+  type WorkCategoryOption,
+} from '../../../src/workCategories';
+import { normalizeProjects, normalizeTasks } from '../../../src/workArtifacts';
 import { focusedMinutes } from '../dateUtils';
 import { SmallList } from './common';
 import { NotesEditor } from './NotesEditor';
@@ -26,6 +33,7 @@ export const DetailPanel = memo(function DetailPanel(props: {
   selectedObservationIds: string[];
   selectedCalendarEvents: ExternalCalendarEventView[];
   calendarReconciliation: CalendarReconciliationView;
+  customCategories: WorkCategoryOption[];
   onEditNotes: (notes: string) => void;
   onCorrectBlock: (correction: {
     title?: string;
@@ -49,6 +57,7 @@ export const DetailPanel = memo(function DetailPanel(props: {
   const [titleDraft, setTitleDraft] = useState('');
   const [categoryDraft, setCategoryDraft] = useState('');
   const [feedbackDraft, setFeedbackDraft] = useState('');
+  const categoryOptions = mergeWorkCategoryOptions(props.customCategories);
 
   useEffect(() => {
     setTitleDraft(props.selectedBlock?.title ?? '');
@@ -96,22 +105,14 @@ export const DetailPanel = memo(function DetailPanel(props: {
             value={categoryDraft}
             onChange={event => setCategoryDraft(event.target.value)}
           >
-            {[
-              'coding',
-              'research',
-              'review',
-              'writing',
-              'communication',
-              'planning',
-              'browsing',
-              'file_management',
-              'meeting',
-              'other',
-            ].map(category => (
-              <option key={category} value={category}>
-                {category.replace('_', ' ')}
+            {categoryOptions.map(category => (
+              <option key={category.value} value={category.value}>
+                {category.label}
               </option>
             ))}
+            {categoryDraft === 'coding' || categoryDraft === 'review' ? (
+              <option value={categoryDraft}>{categoryLabel(categoryDraft)}</option>
+            ) : null}
           </select>
         </label>
         <label>
@@ -171,8 +172,17 @@ export const DetailPanel = memo(function DetailPanel(props: {
       </div>
       <details className="detail-section" open>
         <summary>Artifacts</summary>
-        <SmallList label="Repos" values={block.repos} />
-        <SmallList label="Tickets" values={block.tickets} />
+        <SmallList
+          label="Projects"
+          values={normalizeProjects({
+            projects: block.projects,
+            repos: block.repos,
+          })}
+        />
+        <SmallList
+          label="Tasks"
+          values={normalizeTasks({ tasks: block.tasks, tickets: block.tickets })}
+        />
         <SmallList label="Apps" values={block.apps} />
         <SmallList label="Documents" values={block.documents} />
         <SmallList label="URLs" values={block.urls ?? []} />

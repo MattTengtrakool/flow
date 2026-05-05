@@ -564,6 +564,8 @@ function scoreCalendarBlockMatch(
       block.title,
       block.summary.narrative,
       ...(block.people ?? []),
+      ...(block.projects ?? []),
+      ...(block.tasks ?? []),
       ...block.documents,
       ...block.tickets,
     ].join(' '),

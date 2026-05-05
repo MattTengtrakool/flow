@@ -3,16 +3,14 @@ import type {
   CalendarEventAnnotationPatch,
   CalendarEventBlockLinkAction,
   CalendarItemUpdate,
+  CalendarReconciliationView,
   CalendarSourceMode,
+  CalendarSourceView,
   CalendarStatePayload,
   CreateCalendarItemInput,
+  ExternalCalendarEventView,
+  TaskFitSuggestion,
 } from '../../src/calendar/types';
-import type {
-  AudioPermissionStatus,
-  AudioRecordingRuntimeState,
-  AudioRecordingSource,
-} from '../../src/audio/types';
-import type {MeetingCandidateView} from '../../src/meeting/types';
 import type {
   MeetingAssistantSettings,
   MeetingDetection,
@@ -24,6 +22,8 @@ import type {ProactiveSettings, ProactiveState} from '../../src/proactive/types'
 import type {PlannerRevisionCause, TaskPlanRevisionFailure} from '../../src/planner/types';
 import type {TimelineDiagnosticsReport} from '../../src/timeline/diagnostics';
 import type {DomainEvent, TimelineView} from '../../src/timeline/eventLog';
+import type {WorklogCalendarBlock} from '../../src/worklog/types';
+import type {WorkCategoryOption} from '../../src/workCategories';
 import type {
   CaptureInspectionPayload,
   CaptureResultPayload,
@@ -56,6 +56,7 @@ export type FlowSettings = {
   };
   proactive: ProactiveSettings;
   meetingAssistant: MeetingAssistantSettings;
+  customCategories: WorkCategoryOption[];
   apiKeys: Record<ApiProvider, ApiKeyStatus>;
 };
 
@@ -68,6 +69,7 @@ export type FlowSettingsPatch = Partial<
     | 'privacyModeEnabled'
     | 'proactive'
     | 'meetingAssistant'
+    | 'customCategories'
   >
 >;
 
@@ -117,9 +119,7 @@ export type TimelineStatePayload = {
     lastSkippedReason: string | null;
     consecutiveFailureCount: number;
   };
-  audioRuntimeState: AudioRecordingRuntimeState;
-  activeMeetingCandidate: MeetingCandidateView | null;
-  diagnostics: TimelineDiagnosticsReport;
+  diagnostics: TimelineDiagnosticsReport | null;
   privacyModeEnabled: boolean;
   aiConnectionMode: AiConnectionMode;
   selectedProvider: ApiProvider;
@@ -136,6 +136,20 @@ export type TimelineStatePayload = {
   meetingTranscriptionStatus: MeetingRuntimeState['transcriptionStatus'];
 };
 
+export type WorklogViewRequest = {
+  dateIsos: string[];
+  timezone: string;
+};
+
+export type WorklogViewPayload = {
+  blocksByDate: Record<string, WorklogCalendarBlock[]>;
+  externalEventsByDate: Record<string, ExternalCalendarEventView[]>;
+  calendarSources: CalendarSourceView[];
+  reconciliation: CalendarReconciliationView;
+  taskFitSuggestions: TaskFitSuggestion[];
+  version: number;
+};
+
 export type FlowElectronApi = {
   app: {
     getVersion: () => Promise<string>;
@@ -144,6 +158,8 @@ export type FlowElectronApi = {
   companion: {
     setVisible: (visible: boolean) => Promise<void>;
     setContentHeight: (height: number) => Promise<void>;
+    setContentSize: (size: { width: number; height: number }) => Promise<void>;
+    setMouseEventsIgnored: (ignored: boolean) => Promise<void>;
   };
   storage: {
     loadEventLog: () => Promise<PersistedEventLogPayload>;
@@ -164,24 +180,6 @@ export type FlowElectronApi = {
   };
   chat: {
     runTurn: (args: RunChatTurnArgs) => Promise<RunChatTurnResult>;
-  };
-  audio: {
-    getPermissionsStatus: () => Promise<AudioPermissionStatus>;
-    requestPermissions: () => Promise<AudioPermissionStatus>;
-    startRecording: (args?: {
-      meetingId?: string | null;
-      source?: AudioRecordingSource;
-    }) => Promise<unknown>;
-    pauseRecording: () => Promise<unknown>;
-    resumeRecording: () => Promise<unknown>;
-    stopRecording: () => Promise<unknown>;
-    deleteRecording: (args: {recordingId: string}) => Promise<unknown>;
-  };
-  meeting: {
-    dismissPrompt: (args: {
-      meetingId: string;
-      reason?: 'user_dismissed' | 'not_a_meeting' | 'cooldown';
-    }) => Promise<unknown>;
   };
   calendar: {
     getState: () => Promise<CalendarStatePayload>;
@@ -240,6 +238,7 @@ export type FlowElectronApi = {
   };
   timeline: {
     getState: () => Promise<TimelineStatePayload>;
+    getWorklogView: (request: WorklogViewRequest) => Promise<WorklogViewPayload>;
     startSession: () => Promise<unknown>;
     stopSession: () => Promise<unknown>;
     captureNow: () => Promise<CaptureResultPayload>;

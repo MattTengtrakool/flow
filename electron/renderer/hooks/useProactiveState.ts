@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { startTransition, useCallback, useEffect, useMemo, useState } from 'react';
 
 import {
   DEFAULT_PROACTIVE_SETTINGS,
@@ -31,7 +31,11 @@ export function useProactiveState(flow: FlowElectronApi | undefined) {
 
   useEffect(() => {
     if (flow == null) return;
-    const subscription = flow.proactive.addStateListener(setState);
+    const subscription = flow.proactive.addStateListener(next => {
+      startTransition(() => {
+        setState(next);
+      });
+    });
     return () => subscription.remove();
   }, [flow]);
 

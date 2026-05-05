@@ -1,6 +1,5 @@
-import {useCallback, useEffect, useMemo, useState} from 'react';
+import {startTransition, useCallback, useEffect, useMemo, useState} from 'react';
 
-import type {AudioRecordingSource} from '../../../src/audio/types';
 import {createEmptyTimeline, type TimelineView} from '../../../src/timeline/eventLog';
 import type {
   ApiKeyStatus,
@@ -48,9 +47,6 @@ type StoreState = {
   meetingDetection: TimelineStatePayload['meetingDetection'];
   activeMeetingRecording: TimelineStatePayload['activeMeetingRecording'];
   meetingTranscriptionStatus: TimelineStatePayload['meetingTranscriptionStatus'];
-  audioRuntimeState: TimelineStatePayload['audioRuntimeState'];
-  activeMeetingCandidate: TimelineStatePayload['activeMeetingCandidate'];
-  audioPermissionStatus: TimelineStatePayload['audioRuntimeState']['permissionStatus'];
   diagnostics: TimelineStatePayload['diagnostics'] | null;
 };
 
@@ -106,14 +102,6 @@ function initialState(): StoreState {
     meetingDetection: null,
     activeMeetingRecording: null,
     meetingTranscriptionStatus: 'idle',
-    audioRuntimeState: {
-      permissionStatus: null,
-      activeRecordingId: null,
-      inFlight: false,
-      lastError: null,
-    },
-    activeMeetingCandidate: null,
-    audioPermissionStatus: null,
     diagnostics: null,
   };
 }
@@ -162,9 +150,6 @@ function stateFromPayload(payload: TimelineStatePayload): StoreState {
     meetingDetection: payload.meetingDetection,
     activeMeetingRecording: payload.activeMeetingRecording,
     meetingTranscriptionStatus: payload.meetingTranscriptionStatus,
-    audioRuntimeState: payload.audioRuntimeState,
-    activeMeetingCandidate: payload.activeMeetingCandidate,
-    audioPermissionStatus: payload.audioRuntimeState.permissionStatus,
     diagnostics: payload.diagnostics,
   };
 }
@@ -173,7 +158,9 @@ export function useElectronTimeline(flow: FlowElectronApi | undefined) {
   const [store, setStore] = useState<StoreState>(initialState);
 
   const applyTimelineState = useCallback((payload: TimelineStatePayload) => {
-    setStore(stateFromPayload(payload));
+    startTransition(() => {
+      setStore(stateFromPayload(payload));
+    });
   }, []);
 
   useEffect(() => {
@@ -237,66 +224,6 @@ export function useElectronTimeline(flow: FlowElectronApi | undefined) {
     throw new Error('Electron timeline bridge missing.');
   }, [flow]);
 
-  const requestAudioPermissions = useCallback(async () => {
-    if (flow?.audio != null) {
-      await flow.audio.requestPermissions();
-      return;
-    }
-    throw new Error('Electron audio bridge missing.');
-  }, [flow]);
-
-  const startMeetingRecording = useCallback(
-    async (
-      meetingId?: string | null,
-      source: AudioRecordingSource = 'microphone',
-    ) => {
-      if (flow?.audio != null) {
-        await flow.audio.startRecording({
-          meetingId: meetingId ?? store.activeMeetingCandidate?.meetingId ?? null,
-          source,
-        });
-        return;
-      }
-      throw new Error('Electron audio bridge missing.');
-    },
-    [flow, store.activeMeetingCandidate?.meetingId],
-  );
-
-  const pauseAudioRecording = useCallback(async () => {
-    if (flow?.audio != null) {
-      await flow.audio.pauseRecording();
-      return;
-    }
-    throw new Error('Electron audio bridge missing.');
-  }, [flow]);
-
-  const resumeAudioRecording = useCallback(async () => {
-    if (flow?.audio != null) {
-      await flow.audio.resumeRecording();
-      return;
-    }
-    throw new Error('Electron audio bridge missing.');
-  }, [flow]);
-
-  const stopAudioRecording = useCallback(async () => {
-    if (flow?.audio != null) {
-      await flow.audio.stopRecording();
-      return;
-    }
-    throw new Error('Electron audio bridge missing.');
-  }, [flow]);
-
-  const dismissMeetingPrompt = useCallback(
-    async (meetingId: string) => {
-      if (flow?.meeting != null) {
-        await flow.meeting.dismissPrompt({meetingId});
-        return;
-      }
-      throw new Error('Electron meeting bridge missing.');
-    },
-    [flow],
-  );
-
   const startSession = useCallback(() => {
     if (flow?.timeline != null) {
       flow.timeline.startSession().catch(() => {});
@@ -322,12 +249,6 @@ export function useElectronTimeline(flow: FlowElectronApi | undefined) {
       runCaptureNow,
       runPlannerRevisionNow,
       runDiagnosticReplan,
-      requestAudioPermissions,
-      startMeetingRecording,
-      pauseAudioRecording,
-      resumeAudioRecording,
-      stopAudioRecording,
-      dismissMeetingPrompt,
       startSession,
       stopSession,
     }),
@@ -336,12 +257,6 @@ export function useElectronTimeline(flow: FlowElectronApi | undefined) {
       runCaptureNow,
       runPlannerRevisionNow,
       runDiagnosticReplan,
-      requestAudioPermissions,
-      startMeetingRecording,
-      pauseAudioRecording,
-      resumeAudioRecording,
-      stopAudioRecording,
-      dismissMeetingPrompt,
       startSession,
       stopSession,
     ],

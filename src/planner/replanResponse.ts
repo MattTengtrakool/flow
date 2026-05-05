@@ -170,11 +170,7 @@ function coerceBlock(value: unknown, index: number): ParsedReplanBlock {
     WORKLOG_LABELS,
     `blocks[${index}].label`,
   );
-  const category = requireEnum(
-    candidate.category,
-    CATEGORY_VALUES,
-    `blocks[${index}].category`,
-  );
+  const category = requireString(candidate.category, `blocks[${index}].category`);
   const confidence = requireNumber(
     candidate.confidence,
     `blocks[${index}].confidence`,
@@ -190,9 +186,22 @@ function coerceBlock(value: unknown, index: number): ParsedReplanBlock {
     `blocks[${index}].reasonCodes`,
   );
   const sourceClusterIds = toStringArray(candidate.sourceClusterIds);
+  const backgroundObservationIds = toStringArray(candidate.backgroundObservationIds);
+  const assignmentReason =
+    typeof candidate.assignmentReason === 'string'
+      ? candidate.assignmentReason
+      : '';
+  const timeConfidence =
+    typeof candidate.timeConfidence === 'number' &&
+    Number.isFinite(candidate.timeConfidence)
+      ? candidate.timeConfidence
+      : undefined;
   const artifacts = coerceArtifacts(candidate.artifacts, index);
 
   return {
+    taskKey: typeof candidate.taskKey === 'string' ? candidate.taskKey : '',
+    lineageKey:
+      typeof candidate.lineageKey === 'string' ? candidate.lineageKey : '',
     startAt,
     endAt,
     headline,
@@ -205,6 +214,9 @@ function coerceBlock(value: unknown, index: number): ParsedReplanBlock {
     nextActions,
     calendarEventIds,
     reasonCodes,
+    backgroundObservationIds,
+    assignmentReason,
+    timeConfidence,
     sourceClusterIds,
     artifacts,
   };
@@ -220,6 +232,8 @@ function coerceArtifacts(
   const record = value as Record<string, unknown>;
   return {
     apps: toStringArray(record.apps),
+    projects: toStringArray(record.projects),
+    tasks: toStringArray(record.tasks),
     repositories: toStringArray(record.repositories),
     urls: toStringArray(record.urls),
     tickets: toStringArray(record.tickets),

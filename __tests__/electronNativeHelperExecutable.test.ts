@@ -8,6 +8,9 @@ const helperPath = path.join(
   'electron',
   'native-capture',
   'build',
+  'FlowNativeCapture.app',
+  'Contents',
+  'MacOS',
   'FlowNativeCapture',
 );
 

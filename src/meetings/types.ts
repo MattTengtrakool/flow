@@ -28,6 +28,12 @@ export const DEFAULT_MEETING_ASSISTANT_SETTINGS: MeetingAssistantSettings = {
 };
 
 export type MeetingAudioSource = 'system' | 'microphone';
+export type MeetingMicrophonePermissionStatus =
+  | 'granted'
+  | 'denied'
+  | 'not_determined'
+  | 'restricted'
+  | 'unknown';
 
 export type MeetingDetectionConfidence = 'likely' | 'high';
 
@@ -112,6 +118,7 @@ export type MeetingPermissionState = {
   helperAvailable: boolean;
   screenCaptureGranted: boolean | null;
   microphoneGranted: boolean | null;
+  microphoneStatus: MeetingMicrophonePermissionStatus;
 };
 
 export type MeetingRuntimeState = {
@@ -137,6 +144,7 @@ export type MeetingRuntimeState = {
 export type StartMeetingTranscriptionArgs = {
   detectionId?: string;
   consentAccepted: boolean;
+  sources?: MeetingAudioSource[];
 };
 
 export type ManagedAudioTranscriptionInput = {

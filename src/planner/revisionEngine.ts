@@ -14,6 +14,7 @@ import {
   dedupeArtifactsCaseInsensitive,
   looksLikeWindowChrome,
 } from './artifactDisplay';
+import { normalizeProjects, normalizeTasks } from '../workArtifacts';
 import {
   generateReplanBlocks,
   GeminiRetryableError,
@@ -42,6 +43,7 @@ export type RunPlannerRevisionArgs = {
   maxObservationsInPrompt?: number;
   force?: boolean;
   calendarContext?: CalendarContext;
+  customCategories?: GeminiReplanInput['customCategories'];
   apiKey?: string;
   model?: string;
   sessionIdOverride?: string | null;
@@ -118,6 +120,7 @@ export async function runPlannerRevision(
     clusters,
     previousSnapshot,
     calendarContext: args.calendarContext,
+    customCategories: args.customCategories,
     correctionHints: buildCorrectionHints(timeline, previousSnapshot),
     apiKey: args.apiKey,
     model: args.model,
@@ -254,8 +257,8 @@ function buildCorrectionHints(
  *
  * The replan prompt is explicit: headlines name TASKS, not activities. But LLMs
  * regress. If we see a gerund-first or "and-joined-activities" headline, we
- * rebuild it using the block's own anchors (ticket > PR > distinctive file >
- * repo). This runs AFTER the adjacent-merge pass so merged blocks also benefit.
+ * rebuild it using the block's own anchors (task > project > PR/file/repo).
+ * This runs AFTER the adjacent-merge pass so merged blocks also benefit.
  */
 function repairBlockHeadline(block: PlanBlock): PlanBlock {
   if (isWellFormedTaskHeadline(block.headline)) {
@@ -264,6 +267,8 @@ function repairBlockHeadline(block: PlanBlock): PlanBlock {
   const synthesized = repairTaskTitle({
     title: block.headline,
     artifacts: {
+      projects: normalizeProjects(block.artifacts),
+      tasks: normalizeTasks(block.artifacts),
       tickets: block.artifacts.tickets,
       repositories: block.artifacts.repositories,
       urls: block.artifacts.urls,
@@ -539,6 +544,12 @@ function normalizeBlock(
     ).slice(0, 8),
     artifacts: {
       apps: cleanArtifactList(raw.artifacts.apps, { stripChrome: false }),
+      projects: cleanArtifactList(normalizeProjects(raw.artifacts), {
+        stripChrome: false,
+      }),
+      tasks: cleanArtifactList(normalizeTasks(raw.artifacts), {
+        stripChrome: false,
+      }),
       repositories: cleanArtifactList(raw.artifacts.repositories, {
         stripChrome: false,
       }),
@@ -550,8 +561,42 @@ function normalizeBlock(
       people: cleanArtifactList(raw.artifacts.people, { stripChrome: false }),
     },
     reasonCodes: dedupeArtifactsCaseInsensitive(raw.reasonCodes),
+    taskKey: raw.taskKey?.trim() || stableTaskKey(raw),
+    lineageKey: raw.lineageKey?.trim() || raw.taskKey?.trim() || stableTaskKey(raw),
+    backgroundObservationIds: dedupeArtifactsCaseInsensitive(
+      raw.backgroundObservationIds ?? [],
+    ),
+    assignmentReason: raw.assignmentReason?.trim(),
+    timeConfidence:
+      raw.timeConfidence != null
+        ? Math.max(0, Math.min(1, raw.timeConfidence))
+        : undefined,
     sourceObservationIds,
   };
+}
+
+function stableTaskKey(raw: {
+  headline: string;
+  artifacts: {
+    projects?: string[];
+    tasks?: string[];
+    tickets: string[];
+    repositories: string[];
+    documents: string[];
+  };
+}): string {
+  const anchor =
+    raw.artifacts.tasks?.[0] ??
+    raw.artifacts.projects?.[0] ??
+    raw.artifacts.tickets[0] ??
+    raw.artifacts.repositories[0] ??
+    raw.artifacts.documents[0] ??
+    raw.headline;
+  return anchor
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 80);
 }
 
 function cleanArtifactList(
@@ -565,6 +610,8 @@ function cleanArtifactList(
 }
 
 const ADJACENT_MERGE_GAP_MS = 5 * 60 * 1000;
+const RELATED_MICRO_BLOCK_MERGE_GAP_MS = 15 * 60 * 1000;
+const MICRO_BLOCK_DURATION_MS = 10 * 60 * 1000;
 
 export function mergeAdjacentBlocks(blocks: PlanBlock[]): PlanBlock[] {
   if (blocks.length < 2) return blocks;
@@ -593,7 +640,28 @@ export function mergeAdjacentBlocks(blocks: PlanBlock[]): PlanBlock[] {
 
 function shouldMergeAdjacent(a: PlanBlock, b: PlanBlock): boolean {
   const gapMs = Date.parse(b.startAt) - Date.parse(a.endAt);
-  if (gapMs > ADJACENT_MERGE_GAP_MS) return false;
+  if (gapMs > RELATED_MICRO_BLOCK_MERGE_GAP_MS) return false;
+
+  const sharesTask = sharesAny(normalizeTasks(a.artifacts), normalizeTasks(b.artifacts));
+  const sharesProject = sharesAny(
+    normalizeProjects(a.artifacts),
+    normalizeProjects(b.artifacts),
+  );
+  const isRelatedMicroBlock =
+    gapMs <= RELATED_MICRO_BLOCK_MERGE_GAP_MS &&
+    (durationMs(a) <= MICRO_BLOCK_DURATION_MS ||
+      durationMs(b) <= MICRO_BLOCK_DURATION_MS);
+
+  if (gapMs > ADJACENT_MERGE_GAP_MS) {
+    return isRelatedMicroBlock && (sharesTask || sharesProject);
+  }
+
+  if (sharesTask) {
+    return true;
+  }
+  if (sharesProject) {
+    return true;
+  }
 
   const aRepo = a.artifacts.repositories[0]?.toLowerCase();
   const bRepo = b.artifacts.repositories[0]?.toLowerCase();
@@ -635,6 +703,8 @@ function firstFileArtifact(block: PlanBlock): string | null {
 
 function countSharedArtifacts(a: PlanBlock, b: PlanBlock): number {
   const fields: Array<keyof PlanBlock['artifacts']> = [
+    'projects',
+    'tasks',
     'repositories',
     'tickets',
     'documents',
@@ -644,10 +714,12 @@ function countSharedArtifacts(a: PlanBlock, b: PlanBlock): number {
   ];
   let shared = 0;
   for (const field of fields) {
+    const leftValues = a.artifacts[field] ?? [];
+    const rightValues = b.artifacts[field] ?? [];
     const rightSet = new Set(
-      b.artifacts[field].map(value => value.toLowerCase()),
+      rightValues.map(value => value.toLowerCase()),
     );
-    for (const value of a.artifacts[field]) {
+    for (const value of leftValues) {
       if (rightSet.has(value.toLowerCase())) shared += 1;
     }
   }
@@ -657,6 +729,8 @@ function countSharedArtifacts(a: PlanBlock, b: PlanBlock): number {
 function countArtifacts(block: PlanBlock): number {
   return (
     block.artifacts.repositories.length +
+    (block.artifacts.projects?.length ?? 0) +
+    (block.artifacts.tasks?.length ?? 0) +
     block.artifacts.tickets.length +
     block.artifacts.documents.length +
     block.artifacts.people.length +
@@ -673,6 +747,14 @@ function mergeBlocks(a: PlanBlock, b: PlanBlock): PlanBlock {
     apps: dedupeArtifactsCaseInsensitive([
       ...a.artifacts.apps,
       ...b.artifacts.apps,
+    ]),
+    projects: dedupeArtifactsCaseInsensitive([
+      ...normalizeProjects(a.artifacts),
+      ...normalizeProjects(b.artifacts),
+    ]),
+    tasks: dedupeArtifactsCaseInsensitive([
+      ...normalizeTasks(a.artifacts),
+      ...normalizeTasks(b.artifacts),
     ]),
     repositories: dedupeArtifactsCaseInsensitive([
       ...a.artifacts.repositories,
@@ -727,6 +809,18 @@ function mergeBlocks(a: PlanBlock, b: PlanBlock): PlanBlock {
       ...a.reasonCodes,
       ...b.reasonCodes,
     ]).slice(0, 6),
+    taskKey: primary.taskKey ?? secondary.taskKey,
+    lineageKey: primary.lineageKey ?? secondary.lineageKey,
+    backgroundObservationIds: dedupeArtifactsCaseInsensitive([
+      ...(a.backgroundObservationIds ?? []),
+      ...(b.backgroundObservationIds ?? []),
+    ]),
+    assignmentReason:
+      primary.assignmentReason ?? secondary.assignmentReason ?? undefined,
+    timeConfidence:
+      a.timeConfidence != null && b.timeConfidence != null
+        ? Math.min(a.timeConfidence, b.timeConfidence)
+        : a.timeConfidence ?? b.timeConfidence,
     sourceObservationIds: mergedObservationIds,
   };
 }

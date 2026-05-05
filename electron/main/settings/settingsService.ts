@@ -20,6 +20,8 @@ import type {
   FlowSettings,
   FlowSettingsPatch,
 } from '../../shared/flowApi';
+import type { WorkCategoryOption } from '../../../src/workCategories';
+import { normalizeWorkCategoryOption } from '../../../src/workCategories';
 import { getAppDataDirectoryPath } from '../appProfile';
 
 type StoredApiKey = {
@@ -34,6 +36,7 @@ type StoredSettings = {
   privacyModeEnabled?: boolean;
   proactive?: Partial<ProactiveSettings>;
   meetingAssistant?: Partial<MeetingAssistantSettings>;
+  customCategories?: Array<Partial<WorkCategoryOption>>;
   apiKeys?: Partial<Record<ApiProvider, StoredApiKey>>;
   validation?: Partial<
     Record<
@@ -70,6 +73,7 @@ function defaultStoredSettings(): Required<
     | 'privacyModeEnabled'
     | 'proactive'
     | 'meetingAssistant'
+    | 'customCategories'
   >
 > {
   return {
@@ -79,6 +83,7 @@ function defaultStoredSettings(): Required<
     privacyModeEnabled: false,
     proactive: DEFAULT_PROACTIVE_SETTINGS,
     meetingAssistant: DEFAULT_MEETING_ASSISTANT_SETTINGS,
+    customCategories: [],
   };
 }
 
@@ -92,6 +97,20 @@ export function getSettingsFilePath(): string {
 
 function hasEnvKey(provider: ApiProvider): boolean {
   return (process.env[ENV_BY_PROVIDER[provider]] ?? '').trim().length > 0;
+}
+
+function normalizeCustomCategories(
+  values: Array<Partial<WorkCategoryOption>> | undefined,
+): WorkCategoryOption[] {
+  const result: WorkCategoryOption[] = [];
+  const seen = new Set<string>();
+  for (const value of values ?? []) {
+    const normalized = normalizeWorkCategoryOption(value);
+    if (normalized == null || seen.has(normalized.value)) continue;
+    seen.add(normalized.value);
+    result.push(normalized);
+  }
+  return result.slice(0, 24);
 }
 
 class SettingsService extends EventEmitter<SettingsEvents> {
@@ -133,6 +152,11 @@ class SettingsService extends EventEmitter<SettingsEvents> {
         ...this.stored.meetingAssistant,
         ...patch.meetingAssistant,
       });
+    }
+    if (patch.customCategories != null) {
+      this.stored.customCategories = normalizeCustomCategories(
+        patch.customCategories,
+      );
     }
     await this.persistAndNotify();
     return this.publicSettings();
@@ -252,6 +276,7 @@ class SettingsService extends EventEmitter<SettingsEvents> {
       meetingAssistant: normalizeMeetingAssistantSettings(
         this.stored.meetingAssistant,
       ),
+      customCategories: normalizeCustomCategories(this.stored.customCategories),
       apiKeys: {
         gemini: this.apiKeyStatus('gemini'),
         anthropic: this.apiKeyStatus('anthropic'),

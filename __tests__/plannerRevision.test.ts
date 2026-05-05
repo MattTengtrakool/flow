@@ -36,6 +36,8 @@ function makeObservation(overrides: {
     entities: {
       apps: ['Cursor'],
       documents: ['retry.ts'],
+      projects: ['payments-service'],
+      tasks: ['PAY-193 retry flow'],
       tickets: ['PAY-193'],
       repos: ['payments-service'],
       urls: [],
@@ -85,6 +87,8 @@ describe('condenseObservations', () => {
             entities: {
               apps: ['Cursor'],
               documents: [`retry_${i % 3}.ts`],
+              projects: ['payments-service'],
+              tasks: ['PAY-193 retry flow'],
               tickets: ['PAY-193'],
               repos: ['payments-service'],
               urls: [],
@@ -99,6 +103,11 @@ describe('condenseObservations', () => {
 
     expect(clusters).toHaveLength(1);
     expect(clusters[0].occurrenceCount).toBe(20);
+    expect(clusters[0].artifacts.projects).toEqual(['payments-service']);
+    expect(clusters[0].artifacts.tasks).toEqual([
+      'PAY-193 retry flow',
+      'PAY-193',
+    ]);
     expect(clusters[0].artifacts.repositories).toEqual(['payments-service']);
     expect(clusters[0].artifacts.documents.length).toBeGreaterThanOrEqual(3);
     expect(clusters[0].sourceObservationIds).toHaveLength(20);
@@ -276,10 +285,90 @@ describe('runPlannerRevision', () => {
     expect(result.events[0].type).toBe('task_plan_revised');
     expect(result.snapshot.blocks).toHaveLength(1);
     expect(result.snapshot.blocks[0].headline).toBe('Fix PAY-193 retry');
+    expect(result.snapshot.blocks[0].taskKey).toBe('pay-193');
+    expect(result.snapshot.blocks[0].lineageKey).toBe('pay-193');
     expect(result.snapshot.blocks[0].narrative.length).toBeGreaterThan(20);
     expect(result.snapshot.inputObservationCount).toBe(2);
     expect(result.snapshot.cause).toBe('cadence');
     expect(result.snapshot.sessionId).toBe('session_1');
+  });
+
+  test('preserves explicit batch assignment metadata from replan output', async () => {
+    const observations = [
+      makeObservation({ id: 'obs_1', observedAt: '2026-04-17T13:00:00.000Z' }),
+      makeObservation({
+        id: 'obs_background',
+        observedAt: '2026-04-17T13:02:00.000Z',
+        structured: {
+          summary: 'Glanced at unrelated browser tab.',
+          taskHypothesis: 'Unrelated browsing',
+          entities: {
+            apps: ['Safari'],
+            documents: [],
+            projects: ['Unrelated'],
+            tasks: ['Unrelated browsing'],
+            tickets: [],
+            repos: [],
+            urls: ['https://example.com'],
+            people: [],
+          },
+        },
+      }),
+    ];
+    const timeline = timelineWithObservations(observations);
+
+    const result = await runPlannerRevision({
+      timeline,
+      now,
+      cause: 'cadence',
+      windowMs: WINDOW_MS,
+      runReplan: async () => ({
+        model: 'stub-model',
+        promptVersion: PLANNER_PROMPT_VERSION,
+        durationMs: 100,
+        blocks: [
+          {
+            taskKey: 'pay-193-retry-flow',
+            lineageKey: 'pay-193-retry-flow',
+            startAt: '2026-04-17T13:00:00.000Z',
+            endAt: '2026-04-17T13:10:00.000Z',
+            headline: 'PAY-193 retry flow',
+            narrative: 'Fixed the retry flow using the coding observation.',
+            label: 'worked_on' as const,
+            category: 'software_development' as const,
+            confidence: 0.9,
+            keyActivities: ['Fixed retry flow'],
+            artifacts: {
+              apps: ['Cursor'],
+              projects: ['payments-service'],
+              tasks: ['PAY-193 retry flow'],
+              repositories: ['payments-service'],
+              urls: [],
+              tickets: ['PAY-193'],
+              documents: ['retry.ts'],
+              people: [],
+            },
+            reasonCodes: ['assigned_observation'],
+            backgroundObservationIds: ['obs_background'],
+            assignmentReason:
+              'Only obs_1 showed the retry implementation; obs_background was unrelated.',
+            timeConfidence: 0.78,
+            sourceObservationIds: ['obs_1'],
+          },
+        ],
+      }),
+    });
+
+    expect(result.kind).toBe('success');
+    if (result.kind !== 'success') return;
+    expect(result.snapshot.blocks[0].taskKey).toBe('pay-193-retry-flow');
+    expect(result.snapshot.blocks[0].backgroundObservationIds).toEqual([
+      'obs_background',
+    ]);
+    expect(result.snapshot.blocks[0].assignmentReason).toContain(
+      'obs_background was unrelated',
+    );
+    expect(result.snapshot.blocks[0].timeConfidence).toBe(0.78);
   });
 
   test('can revise a stopped session by explicit session override', async () => {

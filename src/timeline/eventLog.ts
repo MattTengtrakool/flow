@@ -8,12 +8,6 @@ import type {
   StructuredObservation,
 } from '../observation/types';
 import type {
-  AudioPermissionStatus,
-  AudioRecordingView,
-  AudioTranscriptView,
-} from '../audio/types';
-import type { MeetingCandidateView } from '../meeting/types';
-import type {
   TaskPlanRevisionFailure,
   TaskPlanSnapshot,
 } from '../planner/types';
@@ -39,6 +33,7 @@ import type {
   TaskSegmentView,
   UserTaskCorrection,
 } from '../tasks/types';
+import { normalizeProjects, normalizeTasks } from '../workArtifacts';
 
 export type EventBase = {
   id: string;
@@ -140,30 +135,6 @@ export type CalendarItemDeletedEvent = EventBase & {
   itemId: string;
 };
 
-export type MeetingCandidateDetectedEvent = EventBase & {
-  type: 'meeting_candidate_detected';
-  candidate: MeetingCandidateView;
-};
-
-export type MeetingPromptShownEvent = EventBase & {
-  type: 'meeting_prompt_shown';
-  meetingId: string;
-  shownAt: string;
-};
-
-export type MeetingPromptDismissedEvent = EventBase & {
-  type: 'meeting_prompt_dismissed';
-  meetingId: string;
-  dismissedAt: string;
-  reason: 'user_dismissed' | 'not_a_meeting' | 'cooldown' | 'recording_started';
-};
-
-export type MeetingEndedEvent = EventBase & {
-  type: 'meeting_ended';
-  meetingId: string;
-  endedAt: string;
-};
-
 export type ProactiveInsightGeneratedEvent = EventBase & {
   type: 'proactive_insight_generated';
   insight: ProactiveInsight;
@@ -225,73 +196,13 @@ export type MeetingTranscriptionFailedEvent = EventBase & {
   message: string;
 };
 
-export type AudioPermissionChangedEvent = EventBase & {
-  type: 'audio_permission_changed';
-  status: AudioPermissionStatus;
-};
-
-export type AudioRecordingStartedEvent = EventBase & {
-  type: 'audio_recording_started';
-  recording: AudioRecordingView;
-};
-
-export type AudioRecordingPausedEvent = EventBase & {
-  type: 'audio_recording_paused';
-  recordingId: string;
-  pausedAt: string;
-};
-
-export type AudioRecordingResumedEvent = EventBase & {
-  type: 'audio_recording_resumed';
-  recordingId: string;
-  resumedAt: string;
-};
-
-export type AudioRecordingStoppedEvent = EventBase & {
-  type: 'audio_recording_stopped';
-  recordingId: string;
-  stoppedAt: string;
-  durationMs: number | null;
-  filePath: string | null;
-  byteLength: number | null;
-};
-
-export type AudioRecordingFailedEvent = EventBase & {
-  type: 'audio_recording_failed';
-  recordingId: string | null;
-  failedAt: string;
-  errorMessage: string;
-};
-
-export type AudioRecordingDeletedEvent = EventBase & {
-  type: 'audio_recording_deleted';
-  recordingId: string;
-  deletedAt: string;
-};
-
-export type AudioTranscriptGeneratedEvent = EventBase & {
-  type: 'audio_transcript_generated';
-  transcript: AudioTranscriptView;
-};
-
-export type LegacyAudioMeetingSummaryGeneratedEvent = EventBase & {
-  type: 'meeting_summary_generated';
-  meetingId: string;
-  recordingId: string | null;
-  generatedAt: string;
-  title: string;
-  summary: string;
-  actionItems: string[];
-};
-
 export type MeetingAssistantSummaryGeneratedEvent = EventBase & {
   type: 'meeting_summary_generated';
   summary: MeetingSummary;
 };
 
 export type MeetingSummaryGeneratedEvent =
-  | LegacyAudioMeetingSummaryGeneratedEvent
-  | MeetingAssistantSummaryGeneratedEvent;
+  MeetingAssistantSummaryGeneratedEvent;
 
 export type TaskDecisionRecordedEvent = EventBase & {
   type: 'task_decision_recorded';
@@ -340,6 +251,7 @@ export type TaskPendingBufferedEvent = EventBase & {
   type: 'task_pending_buffered';
   pendingObservationId: string;
   pendingObservationIds: string[];
+  evidenceState?: PendingObservationView['evidenceState'];
   bufferedUntil: string | null;
   reasonCodes: string[];
   summary: string;
@@ -349,6 +261,7 @@ export type TaskPendingResolvedEvent = EventBase & {
   type: 'task_pending_resolved';
   observationIds: string[];
   resolutionDecisionId?: string | null;
+  targetSegmentId?: string | null;
 };
 
 export type TaskReconciledEvent = EventBase & {
@@ -410,10 +323,6 @@ export type DomainEvent =
   | CalendarItemCreatedEvent
   | CalendarItemUpdatedEvent
   | CalendarItemDeletedEvent
-  | MeetingCandidateDetectedEvent
-  | MeetingPromptShownEvent
-  | MeetingPromptDismissedEvent
-  | MeetingEndedEvent
   | ProactiveInsightGeneratedEvent
   | ProactiveInsightDismissedEvent
   | ProactiveInsightSnoozedEvent
@@ -425,14 +334,6 @@ export type DomainEvent =
   | MeetingTranscriptChunkAddedEvent
   | MeetingTranscriptionStoppedEvent
   | MeetingTranscriptionFailedEvent
-  | AudioPermissionChangedEvent
-  | AudioRecordingStartedEvent
-  | AudioRecordingPausedEvent
-  | AudioRecordingResumedEvent
-  | AudioRecordingStoppedEvent
-  | AudioRecordingFailedEvent
-  | AudioRecordingDeletedEvent
-  | AudioTranscriptGeneratedEvent
   | MeetingSummaryGeneratedEvent
   | TaskDecisionRecordedEvent
   | TaskSegmentStartedEvent
@@ -484,15 +385,6 @@ export type CaptureRecordView = {
   capture: CaptureMetadataPayload;
 };
 
-export type MeetingSummaryView = {
-  meetingId: string;
-  recordingId: string | null;
-  generatedAt: string;
-  title: string;
-  summary: string;
-  actionItems: string[];
-};
-
 export type UserBlockCorrectionView = {
   blockId: string;
   notesKey?: string;
@@ -527,14 +419,6 @@ export type TimelineView = {
   pendingObservationOrder: string[];
   taskReconciliationsById: Record<string, TaskReconciliationResult>;
   taskReconciliationOrder: string[];
-  meetingCandidatesById: Record<string, MeetingCandidateView>;
-  meetingCandidateOrder: string[];
-  audioRecordingsById: Record<string, AudioRecordingView>;
-  audioRecordingOrder: string[];
-  audioTranscriptsById: Record<string, AudioTranscriptView>;
-  audioTranscriptOrder: string[];
-  meetingSummariesById: Record<string, MeetingSummaryView>;
-  latestAudioPermissionStatus: AudioPermissionStatus | null;
   planSnapshots: TaskPlanSnapshot[];
   lastPlanRevisionFailure: TaskPlanRevisionFailure | null;
   userBlockNotes: Record<
@@ -564,8 +448,6 @@ export type TimelineView = {
   latestCaptureInspectionId: string | null;
   latestCaptureRecordId: string | null;
   latestTaskReconciliationId: string | null;
-  activeMeetingCandidateId: string | null;
-  activeAudioRecordingId: string | null;
 };
 
 export function createDomainId(prefix: string): string {
@@ -601,14 +483,6 @@ export function createEmptyTimeline(): TimelineView {
     pendingObservationOrder: [],
     taskReconciliationsById: {},
     taskReconciliationOrder: [],
-    meetingCandidatesById: {},
-    meetingCandidateOrder: [],
-    audioRecordingsById: {},
-    audioRecordingOrder: [],
-    audioTranscriptsById: {},
-    audioTranscriptOrder: [],
-    meetingSummariesById: {},
-    latestAudioPermissionStatus: null,
     planSnapshots: [],
     lastPlanRevisionFailure: null,
     userBlockNotes: {},
@@ -632,8 +506,6 @@ export function createEmptyTimeline(): TimelineView {
     latestCaptureInspectionId: null,
     latestCaptureRecordId: null,
     latestTaskReconciliationId: null,
-    activeMeetingCandidateId: null,
-    activeAudioRecordingId: null,
   };
 }
 
@@ -685,37 +557,6 @@ function cloneTimeline(timeline: TimelineView): TimelineView {
     pendingObservationOrder: timeline.pendingObservationOrder.slice(),
     taskReconciliationsById: { ...timeline.taskReconciliationsById },
     taskReconciliationOrder: timeline.taskReconciliationOrder.slice(),
-    meetingCandidatesById: Object.fromEntries(
-      Object.entries(timeline.meetingCandidatesById).map(([id, candidate]) => [
-        id,
-        cloneMeetingCandidate(candidate),
-      ]),
-    ),
-    meetingCandidateOrder: timeline.meetingCandidateOrder.slice(),
-    audioRecordingsById: Object.fromEntries(
-      Object.entries(timeline.audioRecordingsById).map(([id, recording]) => [
-        id,
-        { ...recording },
-      ]),
-    ),
-    audioRecordingOrder: timeline.audioRecordingOrder.slice(),
-    audioTranscriptsById: Object.fromEntries(
-      Object.entries(timeline.audioTranscriptsById).map(([id, transcript]) => [
-        id,
-        cloneAudioTranscript(transcript),
-      ]),
-    ),
-    audioTranscriptOrder: timeline.audioTranscriptOrder.slice(),
-    meetingSummariesById: Object.fromEntries(
-      Object.entries(timeline.meetingSummariesById).map(([id, summary]) => [
-        id,
-        { ...summary, actionItems: summary.actionItems.slice() },
-      ]),
-    ),
-    latestAudioPermissionStatus:
-      timeline.latestAudioPermissionStatus == null
-        ? null
-        : { ...timeline.latestAudioPermissionStatus },
     planSnapshots: timeline.planSnapshots.slice(),
     userBlockNotes: { ...timeline.userBlockNotes },
     userBlockCorrections: { ...timeline.userBlockCorrections },
@@ -766,6 +607,7 @@ function cloneTaskSegment(segment: TaskSegmentView): TaskSegmentView {
       repos: segment.entityMemory.repos.slice(),
       ticketIds: segment.entityMemory.ticketIds.slice(),
       projects: segment.entityMemory.projects.slice(),
+      tasks: (segment.entityMemory.tasks ?? []).slice(),
       documents: segment.entityMemory.documents.slice(),
       people: segment.entityMemory.people.slice(),
       urls: segment.entityMemory.urls.slice(),
@@ -784,36 +626,12 @@ function cloneTaskLineage(lineage: TaskLineageView): TaskLineageView {
       repos: lineage.entityMemory.repos.slice(),
       ticketIds: lineage.entityMemory.ticketIds.slice(),
       projects: lineage.entityMemory.projects.slice(),
+      tasks: (lineage.entityMemory.tasks ?? []).slice(),
       documents: lineage.entityMemory.documents.slice(),
       people: lineage.entityMemory.people.slice(),
       urls: lineage.entityMemory.urls.slice(),
     },
   };
-}
-
-function cloneMeetingCandidate(
-  candidate: MeetingCandidateView,
-): MeetingCandidateView {
-  return {
-    ...candidate,
-    reasonCodes: candidate.reasonCodes.slice(),
-    sourceEventIds: candidate.sourceEventIds.slice(),
-  };
-}
-
-function cloneAudioTranscript(
-  transcript: AudioTranscriptView,
-): AudioTranscriptView {
-  return {
-    ...transcript,
-    segments: transcript.segments.map(segment => ({ ...segment })),
-  };
-}
-
-function isMeetingAssistantSummaryEvent(
-  event: MeetingSummaryGeneratedEvent,
-): event is MeetingAssistantSummaryGeneratedEvent {
-  return typeof event.summary === 'object';
 }
 
 function ensureLineage(
@@ -845,6 +663,29 @@ function ensureLineage(
   return created;
 }
 
+function sortObservationIdsByObservedAt(
+  timeline: TimelineView,
+  observationIds: string[],
+): string[] {
+  return observationIds.slice().sort((left, right) => {
+    const leftAt = timeline.observationsById[left]?.observedAt ?? '';
+    const rightAt = timeline.observationsById[right]?.observedAt ?? '';
+    return leftAt.localeCompare(rightAt);
+  });
+}
+
+function earlierIso(left: string, right: string): string {
+  return Date.parse(right) < Date.parse(left) ? right : left;
+}
+
+function laterIso(left: string, right: string): string {
+  return Date.parse(right) > Date.parse(left) ? right : left;
+}
+
+function mergeUnique(left: string[], right: string[]): string[] {
+  return Array.from(new Set([...left, ...right]));
+}
+
 function attachObservationToSegment(
   timeline: TimelineView,
   segmentId: string,
@@ -860,19 +701,70 @@ function attachObservationToSegment(
   if (!segment.observationIds.includes(observationId)) {
     segment.observationIds.push(observationId);
   }
-  segment.lastActiveTime = observedAt;
+  segment.observationIds = sortObservationIdsByObservedAt(
+    timeline,
+    segment.observationIds,
+  );
+  segment.startTime = earlierIso(segment.startTime, observedAt);
+  segment.lastActiveTime = laterIso(segment.lastActiveTime, observedAt);
   if (observation.structured != null) {
+    const { entities } = observation.structured;
     segment.supportingApps = Array.from(
-      new Set([
-        ...segment.supportingApps,
-        ...observation.structured.entities.apps,
-      ]),
+      new Set([...segment.supportingApps, ...entities.apps]),
     );
+    segment.entityMemory = {
+      apps: mergeUnique(segment.entityMemory.apps, entities.apps),
+      repos: mergeUnique(segment.entityMemory.repos, entities.repos),
+      ticketIds: mergeUnique(segment.entityMemory.ticketIds, entities.tickets),
+      projects: mergeUnique(
+        segment.entityMemory.projects,
+        normalizeProjects(entities),
+      ),
+      tasks: mergeUnique(segment.entityMemory.tasks ?? [], normalizeTasks(entities)),
+      documents: mergeUnique(
+        segment.entityMemory.documents,
+        entities.documents,
+      ),
+      people: mergeUnique(segment.entityMemory.people, entities.people),
+      urls: mergeUnique(segment.entityMemory.urls, entities.urls),
+    };
   }
 
   const lineage = timeline.taskLineagesById[segment.lineageId];
   if (lineage != null) {
-    lineage.lastActiveTime = observedAt;
+    lineage.firstStartTime = earlierIso(
+      lineage.firstStartTime,
+      segment.startTime,
+    );
+    lineage.lastActiveTime = laterIso(lineage.lastActiveTime, observedAt);
+    lineage.entityMemory = {
+      apps: mergeUnique(lineage.entityMemory.apps, segment.entityMemory.apps),
+      repos: mergeUnique(
+        lineage.entityMemory.repos,
+        segment.entityMemory.repos,
+      ),
+      ticketIds: mergeUnique(
+        lineage.entityMemory.ticketIds,
+        segment.entityMemory.ticketIds,
+      ),
+      projects: mergeUnique(
+        lineage.entityMemory.projects,
+        segment.entityMemory.projects,
+      ),
+      tasks: mergeUnique(
+        lineage.entityMemory.tasks ?? [],
+        segment.entityMemory.tasks ?? [],
+      ),
+      documents: mergeUnique(
+        lineage.entityMemory.documents,
+        segment.entityMemory.documents,
+      ),
+      people: mergeUnique(
+        lineage.entityMemory.people,
+        segment.entityMemory.people,
+      ),
+      urls: mergeUnique(lineage.entityMemory.urls, segment.entityMemory.urls),
+    };
     if (
       segment.sessionId != null &&
       !lineage.sessionIds.includes(segment.sessionId)
@@ -1234,184 +1126,15 @@ export function applyEventInPlace(timeline: TimelineView, event: DomainEvent) {
       break;
     }
 
-    case 'meeting_candidate_detected': {
-      const candidate = cloneMeetingCandidate(event.candidate);
-      timeline.meetingCandidatesById[candidate.meetingId] = candidate;
-      if (!timeline.meetingCandidateOrder.includes(candidate.meetingId)) {
-        timeline.meetingCandidateOrder.push(candidate.meetingId);
-      }
-      if (
-        candidate.status === 'candidate' ||
-        candidate.status === 'prompted' ||
-        candidate.status === 'recording'
-      ) {
-        timeline.activeMeetingCandidateId = candidate.meetingId;
-      }
-      break;
-    }
-
-    case 'meeting_prompt_shown': {
-      const candidate = timeline.meetingCandidatesById[event.meetingId];
-      if (candidate != null) {
-        candidate.status = 'prompted';
-        candidate.promptShownAt = event.shownAt;
-        candidate.updatedAt = event.shownAt;
-        timeline.activeMeetingCandidateId = event.meetingId;
-      }
-      break;
-    }
-
-    case 'meeting_prompt_dismissed': {
-      const candidate = timeline.meetingCandidatesById[event.meetingId];
-      if (candidate != null) {
-        candidate.status = 'dismissed';
-        candidate.dismissedAt = event.dismissedAt;
-        candidate.updatedAt = event.dismissedAt;
-      }
-      if (timeline.activeMeetingCandidateId === event.meetingId) {
-        timeline.activeMeetingCandidateId = null;
-      }
-      break;
-    }
-
-    case 'meeting_ended': {
-      const candidate = timeline.meetingCandidatesById[event.meetingId];
-      if (candidate != null) {
-        candidate.status = 'ended';
-        candidate.endedAt = event.endedAt;
-        candidate.updatedAt = event.endedAt;
-      }
-      if (timeline.activeMeetingCandidateId === event.meetingId) {
-        timeline.activeMeetingCandidateId = null;
-      }
-      break;
-    }
-
-    case 'audio_permission_changed': {
-      timeline.latestAudioPermissionStatus = { ...event.status };
-      break;
-    }
-
-    case 'audio_recording_started': {
-      timeline.audioRecordingsById[event.recording.recordingId] = {
-        ...event.recording,
+    case 'meeting_summary_generated': {
+      const summary = event.summary;
+      timeline.meetingSummariesByMeetingId[summary.meetingId] = {
+        ...summary,
       };
-      if (!timeline.audioRecordingOrder.includes(event.recording.recordingId)) {
-        timeline.audioRecordingOrder.push(event.recording.recordingId);
-      }
-      timeline.activeAudioRecordingId = event.recording.recordingId;
-      if (event.recording.meetingId != null) {
-        const candidate =
-          timeline.meetingCandidatesById[event.recording.meetingId];
-        if (candidate != null) {
-          candidate.status = 'recording';
-          candidate.recordingId = event.recording.recordingId;
-          candidate.updatedAt = event.recording.startedAt;
-        }
-      }
-      break;
-    }
-
-    case 'audio_recording_paused': {
-      const recording = timeline.audioRecordingsById[event.recordingId];
-      if (recording != null) {
-        recording.status = 'paused';
-        recording.pausedAt = event.pausedAt;
-      }
-      break;
-    }
-
-    case 'audio_recording_resumed': {
-      const recording = timeline.audioRecordingsById[event.recordingId];
-      if (recording != null) {
-        recording.status = 'recording';
-        recording.resumedAt = event.resumedAt;
-        recording.pausedAt = null;
-      }
-      break;
-    }
-
-    case 'audio_recording_stopped': {
-      const recording = timeline.audioRecordingsById[event.recordingId];
+      const recording =
+        timeline.meetingRecordingsById[summary.meetingId] ?? null;
       if (recording != null) {
         recording.status = 'stopped';
-        recording.stoppedAt = event.stoppedAt;
-        recording.durationMs = event.durationMs;
-        recording.filePath = event.filePath;
-        recording.byteLength = event.byteLength;
-        if (recording.meetingId != null) {
-          const candidate = timeline.meetingCandidatesById[recording.meetingId];
-          if (candidate != null) {
-            candidate.status = 'ended';
-            candidate.endedAt = event.stoppedAt;
-            candidate.updatedAt = event.stoppedAt;
-          }
-        }
-      }
-      if (timeline.activeAudioRecordingId === event.recordingId) {
-        timeline.activeAudioRecordingId = null;
-      }
-      break;
-    }
-
-    case 'audio_recording_failed': {
-      if (event.recordingId != null) {
-        const recording = timeline.audioRecordingsById[event.recordingId];
-        if (recording != null) {
-          recording.status = 'failed';
-          recording.errorMessage = event.errorMessage;
-          recording.stoppedAt = event.failedAt;
-        }
-        if (timeline.activeAudioRecordingId === event.recordingId) {
-          timeline.activeAudioRecordingId = null;
-        }
-      }
-      break;
-    }
-
-    case 'audio_recording_deleted': {
-      const recording = timeline.audioRecordingsById[event.recordingId];
-      if (recording != null) {
-        recording.status = 'deleted';
-        recording.stoppedAt = event.deletedAt;
-      }
-      if (timeline.activeAudioRecordingId === event.recordingId) {
-        timeline.activeAudioRecordingId = null;
-      }
-      break;
-    }
-
-    case 'audio_transcript_generated': {
-      timeline.audioTranscriptsById[event.transcript.transcriptId] =
-        cloneAudioTranscript(event.transcript);
-      if (
-        !timeline.audioTranscriptOrder.includes(event.transcript.transcriptId)
-      ) {
-        timeline.audioTranscriptOrder.push(event.transcript.transcriptId);
-      }
-      break;
-    }
-
-    case 'meeting_summary_generated': {
-      if (isMeetingAssistantSummaryEvent(event)) {
-        const summary = event.summary;
-        timeline.meetingSummariesByMeetingId[summary.meetingId] = {
-          ...summary,
-        };
-        const recording =
-          timeline.meetingRecordingsById[summary.meetingId] ?? null;
-        if (recording != null) {
-          recording.status = 'stopped';
-        }
-      } else {
-        timeline.meetingSummariesById[event.meetingId] = {
-          meetingId: event.meetingId,
-          recordingId: event.recordingId,
-          generatedAt: event.generatedAt,
-          title: event.title,
-          summary: event.summary,
-          actionItems: event.actionItems.slice(),
-        };
       }
       break;
     }
@@ -1510,6 +1233,7 @@ export function applyEventInPlace(timeline: TimelineView, event: DomainEvent) {
       for (const observationId of event.pendingObservationIds) {
         timeline.pendingObservationsById[observationId] = {
           observationId,
+          evidenceState: event.evidenceState,
           bufferedAt: event.occurredAt,
           bufferedUntil: event.bufferedUntil,
           reasonCodes: event.reasonCodes.slice(),
@@ -1523,7 +1247,30 @@ export function applyEventInPlace(timeline: TimelineView, event: DomainEvent) {
     }
 
     case 'task_pending_resolved': {
+      const resolutionDecision =
+        event.resolutionDecisionId == null
+          ? null
+          : timeline.taskDecisionsById[event.resolutionDecisionId] ?? null;
+      const targetSegmentId =
+        event.targetSegmentId ??
+        (resolutionDecision != null &&
+        resolutionDecision.decision !== 'hold_pending' &&
+        resolutionDecision.decision !== 'ignore'
+          ? resolutionDecision.targetSegmentId
+          : null);
+
       for (const observationId of event.observationIds) {
+        if (targetSegmentId != null) {
+          const observation = timeline.observationsById[observationId];
+          if (observation != null) {
+            attachObservationToSegment(
+              timeline,
+              targetSegmentId,
+              observationId,
+              observation.observedAt,
+            );
+          }
+        }
         delete timeline.pendingObservationsById[observationId];
         timeline.pendingObservationOrder =
           timeline.pendingObservationOrder.filter(
@@ -1758,20 +1505,4 @@ export function getCurrentTaskLineage(
 ): TaskLineageView | null {
   if (timeline.currentTaskLineageId == null) return null;
   return timeline.taskLineagesById[timeline.currentTaskLineageId] ?? null;
-}
-
-export function getActiveMeetingCandidate(
-  timeline: TimelineView,
-): MeetingCandidateView | null {
-  if (timeline.activeMeetingCandidateId == null) return null;
-  return (
-    timeline.meetingCandidatesById[timeline.activeMeetingCandidateId] ?? null
-  );
-}
-
-export function getActiveAudioRecording(
-  timeline: TimelineView,
-): AudioRecordingView | null {
-  if (timeline.activeAudioRecordingId == null) return null;
-  return timeline.audioRecordingsById[timeline.activeAudioRecordingId] ?? null;
 }

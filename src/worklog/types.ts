@@ -31,6 +31,8 @@ export type WorklogCalendarBlock = {
   title: string;
   summary: WorklogTaskSummary;
   apps: string[];
+  projects?: string[];
+  tasks?: string[];
   repos: string[];
   tickets: string[];
   documents: string[];

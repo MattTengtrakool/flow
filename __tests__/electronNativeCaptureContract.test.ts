@@ -15,6 +15,20 @@ const helperSourcePath = path.join(
   'native-capture',
   'FlowNativeCapture.mm',
 );
+const packageJsonPath = path.join(__dirname, '..', 'package.json');
+const nativeCaptureInfoPlistPath = path.join(
+  __dirname,
+  '..',
+  'electron',
+  'native-capture',
+  'Info.plist',
+);
+const nativeCaptureBuildScriptPath = path.join(
+  __dirname,
+  '..',
+  'scripts',
+  'buildNativeCapture.sh',
+);
 
 describe('Electron native capture helper contract', () => {
   test('helper source exposes the expected command surface', () => {
@@ -36,10 +50,16 @@ describe('Electron native capture helper contract', () => {
 
   test('helper source links the native frameworks required for parity', () => {
     const source = fs.readFileSync(helperSourcePath, 'utf8');
+    const packageJson = fs.readFileSync(packageJsonPath, 'utf8');
+    const infoPlist = fs.readFileSync(nativeCaptureInfoPlistPath, 'utf8');
+    const buildScript = fs.readFileSync(nativeCaptureBuildScriptPath, 'utf8');
 
     expect(source).toContain('ScreenCaptureKit/ScreenCaptureKit.h');
     expect(source).toContain('Vision/Vision.h');
     expect(source).toContain('ApplicationServices/ApplicationServices.h');
+    expect(packageJson).toContain('FlowNativeCapture.app');
+    expect(infoPlist).toContain('com.flow.worklog.native-capture');
+    expect(buildScript).toContain('com.flow.worklog.native-capture');
   });
 
   test('captured payload fixture remains observation-compatible', () => {

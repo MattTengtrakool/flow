@@ -1,4 +1,5 @@
 import type {ObservationView, TimelineView} from '../timeline/eventLog';
+import { isObservationBlockWorthy } from './evidence';
 import type {TaskCandidateSummary, TaskFeatureSnapshot} from './types';
 
 function scoreJoinCurrent(features: TaskFeatureSnapshot): number {
@@ -26,8 +27,10 @@ function scoreJoinCurrent(features: TaskFeatureSnapshot): number {
       features.semanticContinuityScore * 0.4 +
         features.summaryTokenSimilarity * 0.05 +
         features.titleTokenSimilarity * 0.05 +
-        features.repoOverlap * 0.14 +
-        features.ticketOverlap * 0.18 +
+        features.projectOverlap * 0.14 +
+        features.taskOverlap * 0.18 +
+        features.repoOverlap * 0.08 +
+        features.ticketOverlap * 0.1 +
         features.documentOverlap * 0.1 +
         features.peopleOverlap * 0.04 +
         features.urlOverlap * 0.04 +
@@ -54,6 +57,7 @@ export function buildTaskCandidates(args: {
   features: TaskFeatureSnapshot;
 }): TaskCandidateSummary[] {
   const {timeline, features} = args;
+  const blockWorthy = isObservationBlockWorthy(args.observation);
   const currentSegment =
     timeline.currentTaskSegmentId != null
       ? timeline.taskSegmentsById[timeline.currentTaskSegmentId] ?? null
@@ -67,6 +71,10 @@ export function buildTaskCandidates(args: {
       ? timeline.taskSegmentsById[timeline.currentSideBranchSegmentId] ?? null
       : null;
   const joinScore = Math.min(1, scoreJoinCurrent(features));
+  const relatedToCurrent =
+    features.hasPrimaryEntityOverlap ||
+    features.sameTaskHypothesis ||
+    (features.recentAppMatch && features.semanticContinuityScore >= 0.45);
   const recentLineages = timeline.taskLineageOrder
     .slice(-5)
     .map(lineageId => timeline.taskLineagesById[lineageId])
@@ -83,6 +91,8 @@ export function buildTaskCandidates(args: {
       reasonCodes: [
         ...(features.recentAppMatch ? ['recent_app_match'] : []),
         ...(features.appSeenInCurrentSegment ? ['app_seen_in_current_segment'] : []),
+        ...(features.projectOverlap > 0 ? ['same_project'] : []),
+        ...(features.taskOverlap > 0 ? ['same_task'] : []),
         ...(features.repoOverlap > 0 ? ['same_repo'] : []),
         ...(features.ticketOverlap > 0 ? ['same_ticket'] : []),
         ...(features.workflowContinuityHint ? ['workflow_continuity_hint'] : []),
@@ -91,7 +101,11 @@ export function buildTaskCandidates(args: {
       summary: 'Continue the current primary segment.',
     });
 
-    if (features.withinInterruptionTolerance && joinScore < 0.7) {
+    if (
+      features.withinInterruptionTolerance &&
+      joinScore < 0.7 &&
+      relatedToCurrent
+    ) {
       candidates.push({
         decision: 'mark_interruption',
         targetSegmentId: currentSegment.id,
@@ -100,12 +114,12 @@ export function buildTaskCandidates(args: {
           0.42 +
           (features.recentAppMatch ? 0.08 : 0) +
           (features.sameActivityType ? 0.06 : 0) +
-          (features.totalEntityOverlap > 0 ? 0.12 : 0) +
+          (features.hasStrongEntityOverlap ? 0.12 : 0) +
           (features.workflowContinuityHint ? 0.1 : 0),
         reasonCodes: [
           'within_interruption_tolerance',
           ...(features.workflowContinuityHint ? ['workflow_continuity_hint'] : []),
-          ...(features.totalEntityOverlap > 0 ? ['supporting_context'] : []),
+          ...(features.hasStrongEntityOverlap ? ['supporting_context'] : []),
         ],
         summary: 'Treat the observation as a brief interruption inside the current segment.',
       });
@@ -120,8 +134,10 @@ export function buildTaskCandidates(args: {
         features.semanticContinuityScore * 0.28 +
           features.recentObservationSummarySimilarity * 0.14 +
           features.recentObservationHypothesisSimilarity * 0.12 +
-          features.repoOverlap * 0.12 +
-          features.ticketOverlap * 0.12 +
+          features.projectOverlap * 0.12 +
+          features.taskOverlap * 0.12 +
+          features.repoOverlap * 0.08 +
+          features.ticketOverlap * 0.08 +
           (features.recentAppMatch ? 0.08 : 0) +
           (features.workflowContinuityHint ? 0.12 : 0) +
           (features.withinInterruptionTolerance ? 0.08 : 0),
@@ -143,18 +159,24 @@ export function buildTaskCandidates(args: {
     targetSegmentId: null,
     targetLineageId: null,
     score:
-      features.withinInterruptionTolerance && features.totalEntityOverlap > 0
+      !blockWorthy
+        ? 0.1
+        : features.withinInterruptionTolerance && features.totalEntityOverlap > 0
         ? Math.max(0.1, 0.65 - joinScore)
         : Math.max(
             0.2,
             0.35 +
-              (features.recentAppMatch || features.workflowContinuityHint ? 0 : 0.08) +
-              (features.totalEntityOverlap === 0 && !features.workflowContinuityHint ? 0.14 : 0) +
-              (features.semanticContinuityScore < 0.2 && !features.workflowContinuityHint ? 0.14 : 0) -
+              (relatedToCurrent ? 0 : 0.08) +
+              (!features.hasStrongEntityOverlap && !relatedToCurrent ? 0.14 : 0) +
+              (features.semanticContinuityScore < 0.2 && !relatedToCurrent ? 0.14 : 0) -
               joinScore * 0.35,
           ),
-    reasonCodes: ['new_semantic_block'],
-    summary: 'Start a new primary segment.',
+    reasonCodes: blockWorthy
+      ? ['new_semantic_block']
+      : ['candidate_evidence_without_workstream'],
+    summary: blockWorthy
+      ? 'Start a new primary segment.'
+      : 'Hold the observation as evidence until a meaningful workstream is clear.',
   });
 
   if (recentLineages.length > 0) {
@@ -167,7 +189,13 @@ export function buildTaskCandidates(args: {
       );
       const score =
         0.18 +
-        Math.min(0.34, features.repoOverlap * 0.12 + features.ticketOverlap * 0.16) +
+        Math.min(
+          0.34,
+          features.projectOverlap * 0.12 +
+            features.taskOverlap * 0.16 +
+            features.repoOverlap * 0.08 +
+            features.ticketOverlap * 0.1,
+        ) +
         (features.sameTaskHypothesis ? 0.1 : 0) +
         features.recentObservationSummarySimilarity * 0.08 +
         (features.workflowContinuityHint ? 0.08 : 0) +
@@ -187,14 +215,20 @@ export function buildTaskCandidates(args: {
     }
   }
 
-  if (currentSegment != null && joinScore < 0.45 && !features.withinInterruptionTolerance) {
+  if (
+    blockWorthy &&
+    currentSegment != null &&
+    relatedToCurrent &&
+    joinScore < 0.45 &&
+    !features.withinInterruptionTolerance
+  ) {
     candidates.push({
       decision: 'branch_side_task',
       targetSegmentId: null,
       targetLineageId: null,
       score:
         0.32 +
-        (features.totalEntityOverlap > 0 ? 0.08 : 0) +
+        (features.hasStrongEntityOverlap ? 0.08 : 0) +
         (!features.recentAppMatch ? 0.04 : 0) +
         (features.workflowContinuityHint ? 0.08 : 0),
       reasonCodes: [
@@ -211,7 +245,7 @@ export function buildTaskCandidates(args: {
     targetSegmentId: null,
     targetLineageId: currentSegment?.lineageId ?? null,
     score:
-      (joinScore >= 0.35 && joinScore <= 0.72) || features.workflowContinuityHint
+      !blockWorthy || (joinScore >= 0.35 && joinScore <= 0.72 && relatedToCurrent)
         ? 0.52
         : 0.22,
     reasonCodes: ['insufficient_evidence'],

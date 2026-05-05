@@ -240,6 +240,16 @@ static NSDictionary *FlowPermissionPayload(void) {
       }
     }
     if (self.includeMicrophone) {
+      if (@available(macOS 15.0, *)) {
+      } else {
+        if (error != nil) {
+          *error = [NSError errorWithDomain:@"FlowAudioCapture"
+                                       code:5
+                                   userInfo:@{NSLocalizedDescriptionKey:
+                                                @"Combined system and microphone capture requires macOS 15 or newer. Start system and microphone captures separately on this macOS version."}];
+        }
+        return NO;
+      }
       self.microphoneInput = [AVAssetWriterInput assetWriterInputWithMediaType:AVMediaTypeAudio
                                                                 outputSettings:microphoneSettings];
       self.microphoneInput.expectsMediaDataInRealTime = YES;
@@ -291,6 +301,11 @@ static NSDictionary *FlowPermissionPayload(void) {
     configuration.sampleRate = 48000;
     configuration.channelCount = 2;
     configuration.excludesCurrentProcessAudio = YES;
+    if (self.includeMicrophone) {
+      if (@available(macOS 15.0, *)) {
+        configuration.captureMicrophone = YES;
+      }
+    }
 
     self.stream = [[SCStream alloc] initWithFilter:filter
                                      configuration:configuration
@@ -301,6 +316,16 @@ static NSDictionary *FlowPermissionPayload(void) {
                      sampleHandlerQueue:self.sampleQueue
                                   error:error]) {
         return NO;
+      }
+    }
+    if (self.includeMicrophone) {
+      if (@available(macOS 15.0, *)) {
+        if (![self.stream addStreamOutput:self
+                                     type:SCStreamOutputTypeMicrophone
+                       sampleHandlerQueue:self.sampleQueue
+                                    error:error]) {
+          return NO;
+        }
       }
     }
 
@@ -349,6 +374,10 @@ didOutputSampleBuffer:(CMSampleBufferRef)sampleBuffer
   if (@available(macOS 13.0, *)) {
     if (type == SCStreamOutputTypeAudio) {
       input = self.systemInput;
+    } else if (@available(macOS 15.0, *)) {
+      if (type == SCStreamOutputTypeMicrophone) {
+        input = self.microphoneInput;
+      }
     }
   }
   if (input == nil || !input.readyForMoreMediaData) {
@@ -419,13 +448,24 @@ didOutputSampleBuffer:(CMSampleBufferRef)sampleBuffer
 
 @end
 
-static void FlowRequestPermissions(void) {
-  dispatch_semaphore_t semaphore = dispatch_semaphore_create(0);
-  [AVCaptureDevice requestAccessForMediaType:AVMediaTypeAudio
-                           completionHandler:^(__unused BOOL granted) {
-                             dispatch_semaphore_signal(semaphore);
-                           }];
-  dispatch_semaphore_wait(semaphore, DISPATCH_TIME_FOREVER);
+static void FlowRequestPermissions(NSDictionary *options) {
+  BOOL requestMicrophone =
+      options[@"microphone"] == nil || [options[@"microphone"] boolValue];
+  BOOL requestSystem = [options[@"system"] boolValue];
+
+  if (requestMicrophone) {
+    dispatch_semaphore_t semaphore = dispatch_semaphore_create(0);
+    [AVCaptureDevice requestAccessForMediaType:AVMediaTypeAudio
+                             completionHandler:^(__unused BOOL granted) {
+                               dispatch_semaphore_signal(semaphore);
+                             }];
+    dispatch_semaphore_wait(semaphore, DISPATCH_TIME_FOREVER);
+  }
+  if (requestSystem) {
+    if (@available(macOS 13.0, *)) {
+      CGRequestScreenCaptureAccess();
+    }
+  }
   FlowWriteJSON(FlowPermissionPayload());
 }
 
@@ -519,31 +559,6 @@ static void FlowTranscribe(NSDictionary *options) {
   });
 }
 
-static NSString *FlowValueForArg(int argc, const char *argv[], NSString *flag, NSString *fallback) {
-  const char *flagValue = flag.UTF8String;
-  for (int i = 2; i < argc - 1; i += 1) {
-    if (strcmp(argv[i], flagValue) == 0) {
-      return [NSString stringWithUTF8String:argv[i + 1]];
-    }
-  }
-  return fallback;
-}
-
-static void FlowRunChunkedCaptureScaffold(int argc, const char *argv[]) {
-  NSString *meetingId = FlowValueForArg(argc, argv, @"--meeting-id", @"meeting_unknown");
-  FlowWriteJSON(@{
-    @"type": @"audio_capture_started",
-    @"meetingId": meetingId,
-    @"startedAt": FlowTimestamp(),
-  });
-  // Future streaming builds should emit audio_chunk_ready lines every chunk interval.
-  FlowWriteJSON(@{
-    @"type": @"audio_capture_failed",
-    @"meetingId": meetingId,
-    @"message": @"Native meeting audio chunk streaming is not enabled in this build. Use the Flow recording controls for system or microphone capture.",
-  });
-}
-
 static void FlowRunRecording(NSDictionary *options) {
   NSString *outputPath = [options[@"outputPath"] isKindOfClass:NSString.class]
                              ? options[@"outputPath"]
@@ -555,7 +570,7 @@ static void FlowRunRecording(NSDictionary *options) {
     FlowWriteJSON(FlowError(@"Missing audio output path."));
     return;
   }
-  BOOL wantsMicrophone = [source isEqualToString:@"microphone"];
+  BOOL wantsMicrophone = [source isEqualToString:@"microphone"] || [source isEqualToString:@"combined"];
   BOOL wantsSystem = [source isEqualToString:@"system"] || [source isEqualToString:@"combined"];
   if (!wantsMicrophone && !wantsSystem) {
     FlowWriteJSON(FlowError(@"Unknown audio recording source."));
@@ -567,7 +582,7 @@ static void FlowRunRecording(NSDictionary *options) {
     FlowStreamAudioRecorder *streamRecorder =
         [[FlowStreamAudioRecorder alloc] initWithOutputPath:outputPath
                                          includeSystemAudio:YES
-                                          includeMicrophone:NO];
+                                          includeMicrophone:wantsMicrophone];
     if (![streamRecorder startWithError:&streamError]) {
       FlowWriteJSON(FlowError(streamError.localizedDescription ?: @"Failed to start meeting audio recording."));
       return;
@@ -601,7 +616,7 @@ static void FlowRunRecording(NSDictionary *options) {
 
   AVAuthorizationStatus auth = [AVCaptureDevice authorizationStatusForMediaType:AVMediaTypeAudio];
   if (auth == AVAuthorizationStatusNotDetermined) {
-    FlowRequestPermissions();
+    FlowRequestPermissions(@{@"microphone": @YES});
     auth = [AVCaptureDevice authorizationStatusForMediaType:AVMediaTypeAudio];
   }
   if (auth != AVAuthorizationStatusAuthorized) {
@@ -653,12 +668,8 @@ int main(int argc, const char *argv[]) {
       return 0;
     }
     if ([command isEqualToString:@"requestPermissions"]) {
-      FlowRequestPermissions();
+      FlowRequestPermissions(argc >= 3 ? FlowParseJSONArgument(argv[2]) : @{});
       return 0;
-    }
-    if ([command isEqualToString:@"start"]) {
-      FlowRunChunkedCaptureScaffold(argc, argv);
-      return 1;
     }
     if ([command isEqualToString:@"record"]) {
       FlowRunRecording(argc >= 3 ? FlowParseJSONArgument(argv[2]) : @{});

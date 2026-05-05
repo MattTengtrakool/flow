@@ -1,4 +1,4 @@
-import { useCallback, useState } from 'react';
+import { startTransition, useCallback, useDeferredValue, useState } from 'react';
 
 import '../shared/flowApi';
 import type {
@@ -22,12 +22,14 @@ import { useWorklogState } from './hooks/useWorklogState';
 import {
   CalendarScreen,
   ChatScreen,
+  AuditScreen,
   InsightsScreen,
   SettingsScreen,
   TodayScreen,
 } from './screens';
 import type { NavKey } from './types';
 import type { FlowElectronApi } from '../shared/flowApi';
+import { Screen } from './components/common';
 
 export function ElectronApp() {
   if (window.location.hash === '#/companion') {
@@ -43,16 +45,19 @@ function ElectronAppWithBridge(props: { flow: FlowElectronApi }) {
   const { flow } = props;
   const timelineStore = useElectronTimeline(flow);
   const [activeNav, setActiveNav] = useState<NavKey>('calendar');
+  const [contentNav, setContentNav] = useState<NavKey>('calendar');
   const { version, permissions, permissionStatus, checkPermissions } =
     useAppStatus(flow);
   const settingsController = useFlowSettings(flow);
   const calendarState = useCalendarState(flow);
-  const timeline = timelineStore.timeline;
+  const timeline = useDeferredValue(timelineStore.timeline);
   const worklog = useWorklogState({
-    activeNav,
+    activeNav: contentNav,
+    flow,
     calendarAnnotations: calendarState.annotations,
     calendarEvents: calendarState.events,
     calendarSources: calendarState.sources,
+    customCategories: settingsController.settings.customCategories,
     timeline,
     updateEventAnnotation: calendarState.updateEventAnnotation,
     updateEventBlockLink: calendarState.updateEventBlockLink,
@@ -87,6 +92,12 @@ function ElectronAppWithBridge(props: { flow: FlowElectronApi }) {
     selectedCalendarEventSource: worklog.selectedExternalEventSource,
   });
   const timelineCommands = useTimelineCommands(timelineStore);
+  const handleNavigate = useCallback((nextNav: NavKey) => {
+    setActiveNav(nextNav);
+    startTransition(() => {
+      setContentNav(nextNav);
+    });
+  }, []);
 
   if (settingsController.status === 'loading') {
     return <LoadingScreen />;
@@ -111,7 +122,17 @@ function ElectronAppWithBridge(props: { flow: FlowElectronApi }) {
   }
 
   function activeScreen() {
-    switch (activeNav) {
+    if (contentNav !== activeNav) {
+      return (
+        <Screen title={navTitle(activeNav)}>
+          <div className="empty-state roomy">
+            <strong>Loading {navTitle(activeNav).toLowerCase()}…</strong>
+          </div>
+        </Screen>
+      );
+    }
+
+    switch (contentNav) {
       case 'today':
         return (
           <TodayScreen
@@ -153,6 +174,8 @@ function ElectronAppWithBridge(props: { flow: FlowElectronApi }) {
             onSelectExternalEvent={worklog.selectExternalEvent}
           />
         );
+      case 'audit':
+        return <AuditScreen timeline={timelineStore.timeline} />;
       case 'chat':
         return (
           <ChatScreen
@@ -198,7 +221,7 @@ function ElectronAppWithBridge(props: { flow: FlowElectronApi }) {
   return (
     <AppShell
       activeNav={activeNav}
-      onNavigate={setActiveNav}
+      onNavigate={handleNavigate}
       timelineStore={timelineStore}
       detail={worklog.detailProps}
     >
@@ -216,4 +239,21 @@ function ElectronAppWithBridge(props: { flow: FlowElectronApi }) {
       {activeScreen()}
     </AppShell>
   );
+}
+
+function navTitle(nav: NavKey): string {
+  switch (nav) {
+    case 'today':
+      return 'Today';
+    case 'calendar':
+      return 'Calendar';
+    case 'chat':
+      return 'Chat';
+    case 'audit':
+      return 'Audit';
+    case 'insights':
+      return 'Insights';
+    case 'settings':
+      return 'Settings';
+  }
 }

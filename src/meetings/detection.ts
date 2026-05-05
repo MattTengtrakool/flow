@@ -18,6 +18,14 @@ const BROWSER_BUNDLES = new Set([
   'company.thebrowser.Browser',
 ]);
 
+const BROWSER_APP_NAMES = [
+  'google chrome',
+  'safari',
+  'microsoft edge',
+  'firefox',
+  'arc',
+];
+
 const MEETING_APP_RULES: Array<{
   label: string;
   bundleIncludes: string[];
@@ -68,9 +76,19 @@ const TITLE_RULES: Array<{ pattern: RegExp; reason: string; score: number }> = [
     score: 0.58,
   },
   {
+    pattern: /^meet(?:\s+-|$)/i,
+    reason: 'Window title looks like Google Meet.',
+    score: 0.62,
+  },
+  {
     pattern: /\bmeet\.google\.com\b/i,
     reason: 'Window title is a Google Meet URL.',
     score: 0.6,
+  },
+  {
+    pattern: /\bcamera and microphone recording\b/i,
+    reason: 'The browser tab is capturing camera and microphone.',
+    score: 0.5,
   },
   { pattern: /\bteams\b/i, reason: 'Window title mentions Teams.', score: 0.3 },
   {
@@ -135,6 +153,51 @@ export function detectLikelyMeeting(args: {
   };
 }
 
+export type MeetingDetectionContextSource = {
+  context: ContextSnapshotPayload | null;
+  observedAt?: string | Date | null;
+};
+
+export function detectLikelyMeetingFromRecentSources(args: {
+  sources: MeetingDetectionContextSource[];
+  calendar: CalendarStatePayload | null;
+  now?: Date;
+  enabledApps?: string[];
+  dismissedDedupeKeys?: Set<string>;
+  maxAgeMs?: number;
+}): MeetingDetection | null {
+  const now = args.now ?? new Date();
+  const maxAgeMs = args.maxAgeMs ?? 60_000;
+  let best: MeetingDetection | null = null;
+
+  for (const source of args.sources) {
+    const context = source.context;
+    if (context == null) continue;
+    const observedAt = parseObservedAt(source.observedAt ?? context.recordedAt);
+    if (observedAt == null || now.getTime() - observedAt.getTime() > maxAgeMs) {
+      continue;
+    }
+    const detection = detectLikelyMeeting({
+      context,
+      calendar: args.calendar,
+      now,
+      enabledApps: args.enabledApps,
+      dismissedDedupeKeys: args.dismissedDedupeKeys,
+    });
+    if (detection == null) continue;
+    if (
+      best == null ||
+      detection.score > best.score ||
+      (detection.score === best.score &&
+        Date.parse(detection.detectedAt) > Date.parse(best.detectedAt))
+    ) {
+      best = detection;
+    }
+  }
+
+  return best;
+}
+
 export function scoreMeetingContext(args: {
   context: ContextSnapshotPayload;
   calendar: CalendarStatePayload | null;
@@ -173,7 +236,10 @@ export function scoreMeetingContext(args: {
     }
   }
 
-  if (BROWSER_BUNDLES.has(bundleIdentifier)) {
+  if (
+    BROWSER_BUNDLES.has(bundleIdentifier) ||
+    includesAny(appName, BROWSER_APP_NAMES)
+  ) {
     score += 0.18;
     reasons.push('A browser is the active app.');
   }
@@ -218,6 +284,15 @@ export function createMeetingDetectionDedupeKey(
   );
   const event = normalizeKeyPart(calendarEvent?.id ?? 'no-event');
   return `${app}:${title}:${event}:${bucket}`;
+}
+
+function parseObservedAt(value: string | Date | null | undefined): Date | null {
+  if (value instanceof Date) {
+    return Number.isFinite(value.getTime()) ? value : null;
+  }
+  if (value == null) return null;
+  const parsed = new Date(value);
+  return Number.isFinite(parsed.getTime()) ? parsed : null;
 }
 
 function findCurrentBusyCalendarEvent(

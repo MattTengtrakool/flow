@@ -6,6 +6,10 @@ import type {
 } from '../../../src/calendar/types';
 import type { CostSummary } from '../../../src/planner/costSummary';
 import type { FlowSettings, FlowSettingsPatch } from '../../shared/flowApi';
+import {
+  WORK_CATEGORY_OPTIONS,
+  normalizeWorkCategoryOption,
+} from '../../../src/workCategories';
 import type { TimelineUiState } from '../types';
 import { MetricCard } from '../components/MetricCard';
 import { Screen } from '../components/common';
@@ -44,6 +48,8 @@ export const SettingsScreen = memo(function SettingsScreen(props: {
   const { timelineStore } = props;
   const { settings } = props.settingsController;
   const [settingsMessage, setSettingsMessage] = useState<string | null>(null);
+  const [categoryLabelDraft, setCategoryLabelDraft] = useState('');
+  const [categoryDescriptionDraft, setCategoryDescriptionDraft] = useState('');
   const [confirmDisconnectAccountId, setConfirmDisconnectAccountId] = useState<
     string | null
   >(null);
@@ -87,6 +93,48 @@ export const SettingsScreen = memo(function SettingsScreen(props: {
       .catch(error =>
         setSettingsMessage(
           error instanceof Error ? error.message : fallbackMessage,
+        ),
+      );
+  };
+  const addCustomCategory = () => {
+    const normalized = normalizeWorkCategoryOption({
+      label: categoryLabelDraft,
+      description: categoryDescriptionDraft,
+    });
+    if (normalized == null) {
+      setSettingsMessage('Add a category name first.');
+      return;
+    }
+    props.settingsController
+      .updateSettings({
+        customCategories: [
+          ...settings.customCategories.filter(
+            category => category.value !== normalized.value,
+          ),
+          normalized,
+        ],
+      })
+      .then(() => {
+        setCategoryLabelDraft('');
+        setCategoryDescriptionDraft('');
+        setSettingsMessage('Category saved.');
+      })
+      .catch(error =>
+        setSettingsMessage(
+          error instanceof Error ? error.message : 'Could not save category.',
+        ),
+      );
+  };
+  const removeCustomCategory = (value: string) => {
+    props.settingsController
+      .updateSettings({
+        customCategories: settings.customCategories.filter(
+          category => category.value !== value,
+        ),
+      })
+      .catch(error =>
+        setSettingsMessage(
+          error instanceof Error ? error.message : 'Could not remove category.',
         ),
       );
   };
@@ -141,6 +189,56 @@ export const SettingsScreen = memo(function SettingsScreen(props: {
           {settingsMessage != null ? (
             <p className="setup-message">{settingsMessage}</p>
           ) : null}
+        </div>
+      </div>
+
+      <div className="settings-section">
+        <h3>Work categories</h3>
+        <div className="settings-panel">
+          <p>
+            Add custom categories for your work. Built-in categories stay
+            available, and custom ones show up in correction controls and planner
+            prompts.
+          </p>
+          <div className="settings-grid two">
+            <label>
+              <span>Category name</span>
+              <input
+                value={categoryLabelDraft}
+                onChange={event => setCategoryLabelDraft(event.target.value)}
+                placeholder="e.g. Fundraising"
+              />
+            </label>
+            <label>
+              <span>Description</span>
+              <input
+                value={categoryDescriptionDraft}
+                onChange={event =>
+                  setCategoryDescriptionDraft(event.target.value)
+                }
+                placeholder="What this category means"
+              />
+            </label>
+          </div>
+          <button type="button" className="button-secondary" onClick={addCustomCategory}>
+            Add category
+          </button>
+          <div className="chip-row">
+            {settings.customCategories.map(category => (
+              <button
+                key={category.value}
+                type="button"
+                className="chip button-ghost"
+                onClick={() => removeCustomCategory(category.value)}
+                title="Remove category"
+              >
+                {category.label} ×
+              </button>
+            ))}
+          </div>
+          <small>
+            Built-ins: {WORK_CATEGORY_OPTIONS.map(category => category.label).join(', ')}
+          </small>
         </div>
       </div>
 

@@ -89,7 +89,7 @@ export async function saveEventLog(
   eventLog: DomainEvent[],
 ): Promise<SaveEventLogResult> {
   const filePath = getEventLogFilePath();
-  const serialized = JSON.stringify(eventLog, null, 2);
+  const serialized = JSON.stringify(eventLog);
   const saveOperation = saveEventLogQueue.then(() =>
     writeSerializedEventLog(filePath, serialized),
   );

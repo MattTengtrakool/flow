@@ -97,12 +97,10 @@ describe('Electron Google Calendar contract', () => {
     expect(source).not.toContain('calendar.events.patch');
   });
 
-  test('migrates legacy task-context calendars to scheduled mode', () => {
+  test('normalizes unknown calendar source modes to ignored', () => {
     const source = fs.readFileSync(calendarSourcePath, 'utf8');
 
-    expect(source).toContain("value === 'task_context'");
-    expect(source).toContain("return 'scheduled'");
-    expect(source).toContain("? 'scheduled'");
+    expect(source).not.toContain('task_context');
     expect(source).toContain(": 'ignored'");
   });
 

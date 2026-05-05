@@ -1,4 +1,4 @@
-import { BrowserWindow, ipcMain } from 'electron';
+import { ipcMain } from 'electron';
 
 import {
   calendarEventOverlapsRange,
@@ -9,6 +9,7 @@ import type {
   ExternalCalendarEventView,
 } from '../../../src/calendar/types';
 import type { PlanBlock } from '../../../src/planner/types';
+import { normalizeProjects, normalizeTasks } from '../../../src/workArtifacts';
 import {
   type ProactiveBriefRequest,
   type ProactiveInsight,
@@ -24,11 +25,12 @@ import {
 } from '../../../src/timeline/eventLog';
 import type { ContextSnapshotPayload } from '../../../src/types/contextCapture';
 import { generateManagedProactiveBrief } from '../ai/managedAiClient';
-import { getCompanionWindowTitle } from '../appProfile';
 import { calendarService } from '../calendar/googleCalendarService';
 import { syncCompanionWindow } from './companionWindow';
 import { settingsService } from '../settings/settingsService';
 import { timelineService } from '../timeline/timelineService';
+import { sendToAllWindows } from '../windowRegistry';
+import { showMainWindow } from '../windowRegistry';
 
 const EVALUATE_INTERVAL_MS = 60_000;
 const PRE_MEETING_WINDOW_MS = 10 * 60_000;
@@ -212,9 +214,7 @@ class ProactiveService {
   private broadcast() {
     const payload = this.publicState();
     syncCompanionWindow(payload);
-    for (const window of BrowserWindow.getAllWindows()) {
-      window.webContents.send('flow:proactive:stateChanged', payload);
-    }
+    sendToAllWindows('flow:proactive:stateChanged', payload);
   }
 
   private ensureTimer() {
@@ -222,17 +222,6 @@ class ProactiveService {
     this.timer = setInterval(() => {
       this.evaluate().catch(() => {});
     }, EVALUATE_INTERVAL_MS);
-  }
-}
-
-function showMainWindow() {
-  const companionTitle = getCompanionWindowTitle();
-  const window = BrowserWindow.getAllWindows().find(
-    candidate => candidate.getTitle() !== companionTitle,
-  );
-  if (window != null) {
-    window.show();
-    window.focus();
   }
 }
 
@@ -738,6 +727,8 @@ function artifactLabelsForBlocks(blocks: PlanBlock[]): string[] {
 
 function artifactLabelsForBlock(block: PlanBlock): string[] {
   return dedupe([
+    ...normalizeTasks(block.artifacts),
+    ...normalizeProjects(block.artifacts),
     ...block.artifacts.tickets,
     ...block.artifacts.repositories,
     ...block.artifacts.documents,

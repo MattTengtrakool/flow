@@ -1,4 +1,9 @@
 import type {ObservationView} from '../timeline/eventLog';
+import {
+  getObservationPossibleObjective,
+  getObservationPossibleTask,
+} from '../observation/intent';
+import {normalizeProjects, normalizeTasks, uniqueWorkArtifacts} from '../workArtifacts';
 import type {
   TaskEntityMemory,
   TaskFeatureSnapshot,
@@ -44,7 +49,8 @@ function toObservationEntityMemory(observation: ObservationView): TaskEntityMemo
     apps: structured?.entities.apps ?? [],
     repos: structured?.entities.repos ?? [],
     ticketIds: structured?.entities.tickets ?? [],
-    projects: [],
+    projects: structured != null ? normalizeProjects(structured.entities) : [],
+    tasks: structured != null ? normalizeTasks(structured.entities) : [],
     documents: structured?.entities.documents ?? [],
     people: structured?.entities.people ?? [],
     urls: structured?.entities.urls ?? [],
@@ -61,7 +67,8 @@ export function mergeEntityMemory(
     apps: Array.from(new Set([...base.apps, ...next.apps])),
     repos: Array.from(new Set([...base.repos, ...next.repos])),
     ticketIds: Array.from(new Set([...base.ticketIds, ...next.ticketIds])),
-    projects: Array.from(new Set([...base.projects, ...next.projects])),
+    projects: uniqueWorkArtifacts([base.projects, next.projects]),
+    tasks: uniqueWorkArtifacts([base.tasks, next.tasks]),
     documents: Array.from(new Set([...base.documents, ...next.documents])),
     people: Array.from(new Set([...base.people, ...next.people])),
     urls: Array.from(new Set([...base.urls, ...next.urls])),
@@ -88,7 +95,11 @@ export function buildTaskFeatureSnapshot(args: {
   const lineageLastActiveMs =
     currentLineage != null ? Date.parse(currentLineage.lastActiveTime) : null;
   const summaryTokens = tokenize(observation.structured?.summary ?? observation.text);
-  const hypothesisTokens = tokenize(observation.structured?.taskHypothesis ?? null);
+  const hypothesisTokens = tokenize(
+    observation.structured != null
+      ? getObservationPossibleObjective(observation.structured)
+      : null,
+  );
   const segmentTokens = tokenize(currentSegment?.liveSummary ?? '');
   const segmentTitleTokens = tokenize(currentSegment?.liveTitle ?? '');
   const recentSegmentApps =
@@ -99,11 +110,24 @@ export function buildTaskFeatureSnapshot(args: {
       '',
   );
   const recentObservationHypothesisTokens = tokenize(
-    currentSegmentLastObservation?.structured?.taskHypothesis ?? null,
+    currentSegmentLastObservation?.structured != null
+      ? getObservationPossibleTask(currentSegmentLastObservation.structured)
+      : null,
   );
   const currentApps = currentSegment?.supportingApps ?? [];
   const observationEntities = toObservationEntityMemory(observation);
   const appOverlap = overlapCount(observationEntities.apps, currentApps);
+  const explicitObservationProjects =
+    observation.structured?.entities.projects ?? [];
+  const explicitObservationTasks = observation.structured?.entities.tasks ?? [];
+  const projectOverlap = overlapCount(
+    explicitObservationProjects,
+    currentSegment?.entityMemory.projects ?? [],
+  );
+  const taskOverlap = overlapCount(
+    explicitObservationTasks,
+    currentSegment?.entityMemory.tasks ?? currentSegment?.entityMemory.ticketIds ?? [],
+  );
   const repoOverlap = overlapCount(
     observationEntities.repos,
     currentSegment?.entityMemory.repos ?? [],
@@ -142,17 +166,35 @@ export function buildTaskFeatureSnapshot(args: {
     recentObservationHypothesisTokens,
   );
   const sameEntityThread =
-    repoOverlap > 0 || ticketOverlap > 0 || documentOverlap > 0 || urlOverlap > 0;
+    projectOverlap > 0 ||
+    taskOverlap > 0 ||
+    repoOverlap > 0 ||
+    ticketOverlap > 0 ||
+    documentOverlap > 0 ||
+    urlOverlap > 0;
+  const hasStrongEntityOverlap =
+    projectOverlap > 0 ||
+    taskOverlap > 0 ||
+    repoOverlap > 0 ||
+    ticketOverlap > 0 ||
+    documentOverlap > 0 ||
+    urlOverlap > 0;
+  const hasPrimaryEntityOverlap =
+    projectOverlap > 0 ||
+    taskOverlap > 0 ||
+    ticketOverlap > 0 ||
+    documentOverlap > 0 ||
+    urlOverlap > 0;
   const semanticContinuityScore =
     summaryTokenSimilarity * 0.28 +
     recentObservationSummarySimilarity * 0.18 +
     normalizedOverlap(hypothesisTokens, [...segmentTokens, ...segmentTitleTokens]) * 0.16 +
     recentObservationHypothesisSimilarity * 0.12 +
-    (repoOverlap > 0 ? 0.12 : 0) +
-    (ticketOverlap > 0 ? 0.1 : 0) +
+    (projectOverlap > 0 ? 0.12 : repoOverlap > 0 ? 0.08 : 0) +
+    (taskOverlap > 0 ? 0.1 : ticketOverlap > 0 ? 0.08 : 0) +
     (documentOverlap > 0 ? 0.04 : 0);
   const workflowContinuityHint = Boolean(
-    sameEntityThread ||
+    hasStrongEntityOverlap ||
       recentObservationSummarySimilarity >= 0.22 ||
       recentObservationHypothesisSimilarity >= 0.22 ||
       summaryTokenSimilarity >= 0.28 ||
@@ -192,6 +234,8 @@ export function buildTaskFeatureSnapshot(args: {
     titleTokenSimilarity,
     recentObservationSummarySimilarity,
     recentObservationHypothesisSimilarity,
+    projectOverlap: boundedOverlapCount(projectOverlap),
+    taskOverlap: boundedOverlapCount(taskOverlap),
     repoOverlap: boundedOverlapCount(repoOverlap),
     ticketOverlap: boundedOverlapCount(ticketOverlap),
     documentOverlap: boundedOverlapCount(documentOverlap),
@@ -199,11 +243,15 @@ export function buildTaskFeatureSnapshot(args: {
     urlOverlap: boundedOverlapCount(urlOverlap),
     appOverlapCount: boundedOverlapCount(appOverlap),
     totalEntityOverlap:
+      boundedOverlapCount(projectOverlap) +
+      boundedOverlapCount(taskOverlap) +
       boundedOverlapCount(repoOverlap) +
       boundedOverlapCount(ticketOverlap) +
       boundedOverlapCount(documentOverlap) +
       boundedOverlapCount(peopleOverlap) +
       boundedOverlapCount(urlOverlap),
+    hasPrimaryEntityOverlap,
+    hasStrongEntityOverlap,
     sameEntityThread,
     workflowContinuityHint,
     semanticContinuityScore,

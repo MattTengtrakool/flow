@@ -1,13 +1,7 @@
 import type {ChatMessage} from '../../src/chat/runChat';
-import type {
-  AudioPermissionStatus,
-  AudioRecordingRuntimeState,
-  AudioRecordingSource,
-} from '../../src/audio/types';
 import type {ExternalCalendarEventView} from '../../src/calendar/types';
 import type {CostSummary} from '../../src/planner/costSummary';
 import type {PlannerRevisionCause} from '../../src/planner/types';
-import type {MeetingCandidateView} from '../../src/meeting/types';
 import type {TimelineDiagnosticsReport} from '../../src/timeline/diagnostics';
 import type {TimelineView} from '../../src/timeline/eventLog';
 import type {WorklogCalendarBlock} from '../../src/worklog/types';
@@ -20,7 +14,13 @@ import type {
 } from '../shared/flowApi';
 export type {CalendarView} from './dateUtils';
 
-export type NavKey = 'today' | 'calendar' | 'chat' | 'insights' | 'settings';
+export type NavKey =
+  | 'today'
+  | 'calendar'
+  | 'audit'
+  | 'chat'
+  | 'insights'
+  | 'settings';
 
 export type CalendarDisplayItemView =
   | {
@@ -71,22 +71,10 @@ export type TimelineUiState = {
   meetingDetection: TimelineStatePayload['meetingDetection'];
   activeMeetingRecording: TimelineStatePayload['activeMeetingRecording'];
   meetingTranscriptionStatus: TimelineStatePayload['meetingTranscriptionStatus'];
-  audioRuntimeState: AudioRecordingRuntimeState;
-  activeMeetingCandidate: MeetingCandidateView | null;
-  audioPermissionStatus: AudioPermissionStatus | null;
   diagnostics: TimelineDiagnosticsReport | null;
   runCaptureNow: () => Promise<void>;
   runPlannerRevisionNow: (force?: boolean) => Promise<void>;
   runDiagnosticReplan: () => Promise<void>;
-  requestAudioPermissions: () => Promise<void>;
-  startMeetingRecording: (
-    meetingId?: string | null,
-    source?: AudioRecordingSource,
-  ) => Promise<void>;
-  pauseAudioRecording: () => Promise<void>;
-  resumeAudioRecording: () => Promise<void>;
-  stopAudioRecording: () => Promise<void>;
-  dismissMeetingPrompt: (meetingId: string) => Promise<void>;
   startSession: () => void;
   stopSession: () => Promise<void>;
 };

@@ -3,6 +3,8 @@ import type {
   ObservationActivityType,
   StructuredObservation,
 } from '../observation/types';
+import { getObservationPossibleObjective } from '../observation/intent';
+import { normalizeProjects, normalizeTasks } from '../workArtifacts';
 import type { CondensedObservationEntry } from './types';
 
 const DEFAULT_GAP_MS = 3 * 60 * 1000;
@@ -19,6 +21,8 @@ type ClusterDraft = {
   summaries: string[];
   nextActions: Set<string>;
   apps: Set<string>;
+  projects: Set<string>;
+  tasks: Set<string>;
   repositories: Set<string>;
   urls: Set<string>;
   tickets: Set<string>;
@@ -84,6 +88,8 @@ export function condenseObservations(
     nextActions: Array.from(draft.nextActions).slice(0, 3),
     artifacts: {
       apps: Array.from(draft.apps).slice(0, 8),
+      projects: Array.from(draft.projects).slice(0, 8),
+      tasks: Array.from(draft.tasks).slice(0, 8),
       repositories: Array.from(draft.repositories).slice(0, 8),
       urls: Array.from(draft.urls).slice(0, 8),
       tickets: Array.from(draft.tickets).slice(0, 8),
@@ -126,20 +132,23 @@ function canMerge(
   }
 
   const currentHypothesis = normalize(current.taskHypothesis);
-  const nextHypothesis = normalize(observation.structured.taskHypothesis);
+  const nextHypothesis = normalize(
+    getObservationPossibleObjective(observation.structured),
+  );
   if (currentHypothesis !== nextHypothesis) {
     return false;
   }
 
-  const firstRepoSignal = observation.structured.entities.repos[0] ?? null;
+  const nextProjects = normalizeProjects(observation.structured.entities);
+  const firstProjectSignal = nextProjects[0] ?? null;
   const firstAppSignal = observation.structured.entities.apps[0] ?? null;
-  if (firstRepoSignal != null && !current.repositories.has(firstRepoSignal)) {
-    if (current.repositories.size > 0) {
+  if (firstProjectSignal != null && !current.projects.has(firstProjectSignal)) {
+    if (current.projects.size > 0) {
       return false;
     }
   }
   if (
-    firstRepoSignal == null &&
+    firstProjectSignal == null &&
     firstAppSignal != null &&
     current.apps.size > 0 &&
     !current.apps.has(firstAppSignal)
@@ -169,16 +178,14 @@ function createDraft(
     earliestMs: observedMs,
     latestMs: observedMs,
     occurrenceCount: 1,
-    taskHypothesis:
-      observation.structured.taskHypothesis?.trim().length != null &&
-      (observation.structured.taskHypothesis?.trim().length ?? 0) > 0
-        ? observation.structured.taskHypothesis!.trim()
-        : null,
+    taskHypothesis: getObservationPossibleObjective(observation.structured),
     activityType: observation.structured.activityType,
     sourceObservationIds: [observation.id],
     summaries: summary.length > 0 ? [summary] : [],
     nextActions,
     apps: new Set(observation.structured.entities.apps),
+    projects: new Set(normalizeProjects(observation.structured.entities)),
+    tasks: new Set(normalizeTasks(observation.structured.entities)),
     repositories: new Set(observation.structured.entities.repos),
     urls: new Set(observation.structured.entities.urls),
     tickets: new Set(observation.structured.entities.tickets),
@@ -211,6 +218,12 @@ function extendDraft(
 
   for (const value of observation.structured.entities.apps) {
     draft.apps.add(value);
+  }
+  for (const value of normalizeProjects(observation.structured.entities)) {
+    draft.projects.add(value);
+  }
+  for (const value of normalizeTasks(observation.structured.entities)) {
+    draft.tasks.add(value);
   }
   for (const value of observation.structured.entities.repos) {
     draft.repositories.add(value);
@@ -282,6 +295,8 @@ function mergeDrafts(left: ClusterDraft, right: ClusterDraft): ClusterDraft {
     summaries,
     nextActions: new Set([...left.nextActions, ...right.nextActions]),
     apps: new Set([...left.apps, ...right.apps]),
+    projects: new Set([...left.projects, ...right.projects]),
+    tasks: new Set([...left.tasks, ...right.tasks]),
     repositories: new Set([...left.repositories, ...right.repositories]),
     urls: new Set([...left.urls, ...right.urls]),
     tickets: new Set([...left.tickets, ...right.tickets]),

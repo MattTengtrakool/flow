@@ -2,6 +2,7 @@ import { memo, useMemo } from 'react';
 
 import type { CostSummary } from '../../../src/planner/costSummary';
 import type { WorklogCalendarBlock } from '../../../src/worklog/types';
+import { normalizeProjects, normalizeTasks } from '../../../src/workArtifacts';
 import { focusedMinutes } from '../dateUtils';
 import { BlockCard } from '../components/BlockCard';
 import { MetricCard } from '../components/MetricCard';
@@ -32,12 +33,18 @@ export const InsightsScreen = memo(function InsightsScreen(props: {
     () => focusedMinutes(props.allBlocks),
     [props.allBlocks],
   );
-  const repos = useMemo(
-    () => topValues(props.allBlocks, block => block.repos),
+  const projects = useMemo(
+    () =>
+      topValues(props.allBlocks, block =>
+        normalizeProjects({ projects: block.projects, repos: block.repos }),
+      ),
     [props.allBlocks],
   );
-  const tickets = useMemo(
-    () => topValues(props.allBlocks, block => block.tickets),
+  const tasks = useMemo(
+    () =>
+      topValues(props.allBlocks, block =>
+        normalizeTasks({ tasks: block.tasks, tickets: block.tickets }),
+      ),
     [props.allBlocks],
   );
 
@@ -66,19 +73,19 @@ export const InsightsScreen = memo(function InsightsScreen(props: {
 
       <div className="insight-grid">
         <section className="panel-card">
-          <h3>Top repositories</h3>
-          {repos.map(([repo, count]) => (
-            <div key={repo} className="insight-row">
-              <span>{repo}</span>
+          <h3>Top projects</h3>
+          {projects.map(([project, count]) => (
+            <div key={project} className="insight-row">
+              <span>{project}</span>
               <strong>{count}</strong>
             </div>
           ))}
         </section>
         <section className="panel-card">
-          <h3>Top tickets</h3>
-          {tickets.map(([ticket, count]) => (
-            <div key={ticket} className="insight-row">
-              <span>{ticket}</span>
+          <h3>Top tasks</h3>
+          {tasks.map(([task, count]) => (
+            <div key={task} className="insight-row">
+              <span>{task}</span>
               <strong>{count}</strong>
             </div>
           ))}

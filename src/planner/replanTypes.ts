@@ -1,10 +1,11 @@
-import { OBSERVATION_ACTIVITY_TYPES } from '../observation/types';
+import { PREFERRED_OBSERVATION_ACTIVITY_TYPES } from '../observation/types';
 import type { CalendarContext } from '../calendar/types';
 import type {
   CondensedObservationEntry,
   PlanUsage,
   TaskPlanSnapshot,
 } from './types';
+import type { WorkCategoryOption } from '../workCategories';
 
 export const MAX_SOURCE_OBSERVATIONS_PER_BLOCK = 40;
 
@@ -17,9 +18,14 @@ export const WORKLOG_LABELS = [
 ] as const;
 
 export const CATEGORY_VALUES = [
-  ...OBSERVATION_ACTIVITY_TYPES,
+  ...PREFERRED_OBSERVATION_ACTIVITY_TYPES,
+  'coding',
+  'review',
+  'planning',
   'other',
 ] as const;
+
+export const PREFERRED_CATEGORY_VALUES = PREFERRED_OBSERVATION_ACTIVITY_TYPES;
 
 export type ReplanInput = {
   windowStartAt: string;
@@ -37,24 +43,29 @@ export type ReplanInput = {
     mergeWithBlockId?: string;
     splitAt?: string;
   }>;
+  customCategories?: WorkCategoryOption[];
   apiKey?: string;
   model?: string;
 };
 
 export type ReplanRawBlock = {
+  taskKey?: string;
+  lineageKey?: string;
   startAt: string;
   endAt: string;
   headline: string;
   narrative: string;
   notes?: string;
   label: (typeof WORKLOG_LABELS)[number];
-  category: (typeof CATEGORY_VALUES)[number];
+  category: (typeof CATEGORY_VALUES)[number] | (string & {});
   confidence: number;
   keyActivities: string[];
   nextActions?: string[];
   calendarEventIds?: string[];
   artifacts: {
     apps: string[];
+    projects?: string[];
+    tasks?: string[];
     repositories: string[];
     urls: string[];
     tickets: string[];
@@ -62,6 +73,9 @@ export type ReplanRawBlock = {
     people: string[];
   };
   reasonCodes: string[];
+  backgroundObservationIds?: string[];
+  assignmentReason?: string;
+  timeConfidence?: number;
   sourceObservationIds: string[];
 };
 

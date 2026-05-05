@@ -589,7 +589,7 @@ describe('live task grouping regression coverage', () => {
     expect(worklog.blocks).toHaveLength(0);
   });
 
-  test('replays live task segment events and uses them before planner snapshots', () => {
+  test('replays live task segment events but renders planner snapshots as authoritative', () => {
     const events: DomainEvent[] = [
       {
         id: 'event_session_start',
@@ -703,14 +703,14 @@ describe('live task grouping regression coverage', () => {
     expect(timeline.taskSegmentOrder).toEqual(['segment_1']);
     expect(worklog.blocks).toHaveLength(1);
     expect(worklog.blocks[0]).toMatchObject({
-      id: 'segment_1',
-      title: 'Flow capture planning repair',
+      id: 'plan_block_1',
+      title: 'Tiny planner block',
       repos: ['flow'],
     });
     expect(
       Date.parse(worklog.blocks[0].endTime) -
         Date.parse(worklog.blocks[0].startTime),
-    ).toBe(20 * 60 * 1000);
+    ).toBe(60 * 1000);
   });
 
   test('prefers planner rollups over overlapping live micro segments', () => {

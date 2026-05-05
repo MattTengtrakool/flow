@@ -4,9 +4,13 @@
 <plist version="1.0">
 <dict>
   <key>CFBundleIdentifier</key>
-  <string>com.flow.worklog</string>
+  <string>com.flow.worklog.native-audio</string>
+  <key>CFBundleExecutable</key>
+  <string>FlowAudioCapture</string>
   <key>CFBundleName</key>
   <string>FlowAudioCapture</string>
+  <key>CFBundlePackageType</key>
+  <string>APPL</string>
   <key>NSMicrophoneUsageDescription</key>
   <string>Flow records meeting audio only when you explicitly start recording.</string>
   <key>NSSpeechRecognitionUsageDescription</key>

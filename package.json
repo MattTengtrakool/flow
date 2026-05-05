@@ -24,8 +24,8 @@
     "electron:dist": "pnpm native-capture:build && pnpm native-audio:build && pnpm electron:build && electron-builder --mac dir --mac zip",
     "electron:dist:dev": "pnpm native-capture:build && pnpm native-audio:build && pnpm electron:build && FLOW_APP_PROFILE=dev electron-builder --mac dir --mac zip --config.appId=com.flow.worklog.dev --config.productName=\"Flow Dev\" --config.directories.output=release-dev",
     "electron:dist:dmg": "pnpm native-capture:build && pnpm native-audio:build && pnpm electron:build && electron-builder --mac dmg",
-    "native-capture:build": "mkdir -p electron/native-capture/build && xcrun clang++ -std=c++17 -fobjc-arc -framework Foundation -framework AppKit -framework ApplicationServices -framework CoreGraphics -framework ScreenCaptureKit -framework Vision electron/native-capture/FlowNativeCapture.mm -o electron/native-capture/build/FlowNativeCapture",
-    "native-audio:build": "mkdir -p electron/native-audio/build && xcrun clang++ -std=c++17 -fobjc-arc -framework Foundation -framework AVFoundation -framework CoreGraphics -framework CoreMedia -framework ScreenCaptureKit -framework Speech -sectcreate __TEXT __info_plist electron/native-audio/Info.plist electron/native-audio/FlowAudioCapture.mm -o electron/native-audio/build/FlowAudioCapture",
+    "native-capture:build": "sh scripts/buildNativeCapture.sh",
+    "native-audio:build": "sh scripts/buildNativeAudio.sh",
     "doctor:node": "node ./scripts/ensureNodeCompatible.js",
     "benchmark:planner": "node ./scripts/benchmarkPlanner.js",
     "check": "pnpm format:check && pnpm lint && pnpm typecheck && pnpm test",
@@ -93,12 +93,12 @@
     ],
     "extraResources": [
       {
-        "from": "electron/native-capture/build/FlowNativeCapture",
-        "to": "native-capture/FlowNativeCapture"
+        "from": "electron/native-capture/build/FlowNativeCapture.app",
+        "to": "native-capture/FlowNativeCapture.app"
       },
       {
-        "from": "electron/native-audio/build/FlowAudioCapture",
-        "to": "native-audio/FlowAudioCapture"
+        "from": "electron/native-audio/build/FlowAudioCapture.app",
+        "to": "native-audio/FlowAudioCapture.app"
       }
     ],
     "mac": {

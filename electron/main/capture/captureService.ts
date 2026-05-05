@@ -1,17 +1,16 @@
-import { BrowserWindow, ipcMain } from 'electron';
+import { ipcMain } from 'electron';
 
 import type { ContextSnapshotPayload } from '../../../src/types/contextCapture';
 import {
   NativeCaptureClient,
   type MonitoringOptions,
 } from './nativeCaptureClient';
+import { sendToAllWindows } from '../windowRegistry';
 
 export const captureClient = new NativeCaptureClient();
 
 captureClient.on('contextSnapshotDidChange', snapshot => {
-  for (const window of BrowserWindow.getAllWindows()) {
-    window.webContents.send('flow:capture:contextSnapshotDidChange', snapshot);
-  }
+  sendToAllWindows('flow:capture:contextSnapshotDidChange', snapshot);
 });
 
 export function registerCaptureIpcHandlers() {

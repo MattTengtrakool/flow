@@ -2,6 +2,8 @@ import type { ObservationView, TimelineView } from '../timeline/eventLog';
 import type { CalendarContext, CalendarContextEvent } from '../calendar/types';
 import type { WorklogCalendarBlock } from '../worklog/types';
 import { getAllPlanCalendarBlocks } from '../planner/selectors';
+import { getObservationPossibleObjective } from '../observation/intent';
+import { normalizeProjects, normalizeTasks } from '../workArtifacts';
 
 /**
  * Tools the chat assistant can call to answer questions about the user's
@@ -76,7 +78,7 @@ export const CHAT_TOOL_DECLARATIONS: ChatToolDeclaration[] = [
   {
     name: 'get_total_time',
     description:
-      'Aggregate focused minutes across blocks in a time range, broken down by group. Use group="project" to break down by repository / primary artifact. group="category" for activity types (coding, meeting, research…). group="ticket" for ticket IDs. group="day" for daily totals.',
+      'Aggregate focused minutes across blocks in a time range, broken down by group. Use group="project" for projects/clients/campaigns/accounts. group="task" for concrete tasks or task IDs. group="category" for activity types. group="day" for daily totals.',
     parameters: {
       type: 'object',
       properties: {
@@ -91,8 +93,8 @@ export const CHAT_TOOL_DECLARATIONS: ChatToolDeclaration[] = [
         group: {
           type: 'string',
           description:
-            'How to aggregate: project | category | ticket | day | none (just total).',
-          enum: ['project', 'category', 'ticket', 'day', 'none'],
+            'How to aggregate: project | task | category | ticket | day | none (ticket is a legacy alias for task).',
+          enum: ['project', 'task', 'category', 'ticket', 'day', 'none'],
         },
         topicFilter: {
           type: 'string',
@@ -540,7 +542,10 @@ function executeGetBlockDetails(
     .map(observation => ({
       observedAt: observation.observedAt,
       summary: observation.structured?.summary ?? observation.text,
-      taskHypothesis: observation.structured?.taskHypothesis ?? null,
+      taskHypothesis:
+        observation.structured != null
+          ? getObservationPossibleObjective(observation.structured)
+          : null,
       activityType: observation.structured?.activityType ?? null,
       apps: observation.structured?.entities.apps ?? [],
       urls: observation.structured?.entities.urls ?? [],
@@ -563,6 +568,11 @@ function executeGetBlockDetails(
       nextActions: block.nextActions ?? [],
       artifacts: {
         apps: block.apps,
+        projects: normalizeProjects({
+          projects: block.projects,
+          repos: block.repos,
+        }),
+        tasks: normalizeTasks({ tasks: block.tasks, tickets: block.tickets }),
         repos: block.repos,
         tickets: block.tickets,
         documents: block.documents,
@@ -596,6 +606,10 @@ function executeGetObservationsInRange(
     observedAt: string;
     summary: string;
     taskHypothesis: string | null;
+    possibleObjective?: string | null;
+    possibleProject?: string | null;
+    possibleTask?: string | null;
+    visibleAction?: string | null;
     activityType: string | null;
     apps: string[];
     urls: string[];
@@ -613,7 +627,14 @@ function executeGetObservationsInRange(
     matches.push({
       observedAt: observation.observedAt,
       summary: observation.structured?.summary ?? observation.text,
-      taskHypothesis: observation.structured?.taskHypothesis ?? null,
+      taskHypothesis:
+        observation.structured != null
+          ? getObservationPossibleObjective(observation.structured)
+          : null,
+      possibleObjective: observation.structured?.possibleObjective,
+      possibleProject: observation.structured?.possibleProject,
+      possibleTask: observation.structured?.possibleTask,
+      visibleAction: observation.structured?.visibleAction,
       activityType: observation.structured?.activityType ?? null,
       apps: observation.structured?.entities.apps ?? [],
       urls: observation.structured?.entities.urls ?? [],
@@ -703,6 +724,8 @@ function blockMatchesTopic(
     block.title,
     block.summary.narrative,
     block.notes ?? '',
+    ...(block.projects ?? []),
+    ...(block.tasks ?? []),
     ...block.repos,
     ...block.tickets,
     ...block.documents,
@@ -732,6 +755,8 @@ function summariseBlock(block: WorklogCalendarBlock) {
     nextActions: block.nextActions ?? [],
     artifacts: {
       apps: block.apps,
+      projects: normalizeProjects({ projects: block.projects, repos: block.repos }),
+      tasks: normalizeTasks({ tasks: block.tasks, tickets: block.tickets }),
       repos: block.repos,
       tickets: block.tickets,
       documents: block.documents,
@@ -758,7 +783,7 @@ function bucketsForBlock(block: WorklogCalendarBlock, group: string): string[] {
   switch (group) {
     case 'project': {
       const labels: string[] = [];
-      labels.push(...block.repos);
+      labels.push(...normalizeProjects({ projects: block.projects, repos: block.repos }));
       if (labels.length === 0) labels.push(...block.documents.slice(0, 1));
       if (
         labels.length === 0 &&
@@ -770,8 +795,10 @@ function bucketsForBlock(block: WorklogCalendarBlock, group: string): string[] {
     }
     case 'category':
       return [block.category ?? 'other'];
+    case 'task':
+      return normalizeTasks({ tasks: block.tasks, tickets: block.tickets });
     case 'ticket':
-      return block.tickets;
+      return normalizeTasks({ tasks: block.tasks, tickets: block.tickets });
     case 'day':
       return [block.startTime.slice(0, 10)];
     default:
@@ -807,9 +834,9 @@ function scoreBlockForQuery(block: WorklogCalendarBlock, q: string): number {
   if (block.title.toLowerCase().includes(q)) score += 10;
   if (block.summary.narrative.toLowerCase().includes(q)) score += 5;
   if ((block.notes ?? '').toLowerCase().includes(q)) score += 4;
-  for (const item of block.repos)
+  for (const item of normalizeProjects({ projects: block.projects, repos: block.repos }))
     if (item.toLowerCase().includes(q)) score += 3;
-  for (const item of block.tickets)
+  for (const item of normalizeTasks({ tasks: block.tasks, tickets: block.tickets }))
     if (item.toLowerCase().includes(q)) score += 3;
   for (const item of block.documents)
     if (item.toLowerCase().includes(q)) score += 2;
@@ -825,9 +852,17 @@ function observationMatchesQuery(
 ): boolean {
   const fields: string[] = [
     observation.structured?.summary ?? observation.text,
-    observation.structured?.taskHypothesis ?? '',
+    observation.structured != null
+      ? getObservationPossibleObjective(observation.structured) ?? ''
+      : '',
     ...(observation.structured?.entities.apps ?? []),
     ...(observation.structured?.entities.urls ?? []),
+    ...(observation.structured != null
+      ? normalizeProjects(observation.structured.entities)
+      : []),
+    ...(observation.structured != null
+      ? normalizeTasks(observation.structured.entities)
+      : []),
     ...(observation.structured?.entities.tickets ?? []),
     ...(observation.structured?.entities.repos ?? []),
     ...(observation.structured?.entities.documents ?? []),

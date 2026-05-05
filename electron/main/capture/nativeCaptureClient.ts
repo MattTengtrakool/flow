@@ -33,6 +33,9 @@ function nativeCaptureHelperPath(): string {
     return path.join(
       process.resourcesPath,
       'native-capture',
+      'FlowNativeCapture.app',
+      'Contents',
+      'MacOS',
       'FlowNativeCapture',
     );
   }
@@ -41,6 +44,9 @@ function nativeCaptureHelperPath(): string {
     'electron',
     'native-capture',
     'build',
+    'FlowNativeCapture.app',
+    'Contents',
+    'MacOS',
     'FlowNativeCapture',
   );
 }
@@ -96,6 +102,7 @@ export class NativeCaptureClient extends EventEmitter<NativeCaptureEvents> {
   private monitorTimer: NodeJS.Timeout | null = null;
   private lastSnapshot: ContextSnapshotPayload | null = null;
   private polling = false;
+  private captureNowInFlight: Promise<CaptureResultPayload> | null = null;
 
   private currentOptions(): MonitoringOptions {
     return {
@@ -221,6 +228,16 @@ export class NativeCaptureClient extends EventEmitter<NativeCaptureEvents> {
   }
 
   async captureNow(): Promise<CaptureResultPayload> {
+    if (this.captureNowInFlight != null) {
+      return this.captureNowInFlight;
+    }
+    this.captureNowInFlight = this.performCaptureNow().finally(() => {
+      this.captureNowInFlight = null;
+    });
+    return this.captureNowInFlight;
+  }
+
+  private async performCaptureNow(): Promise<CaptureResultPayload> {
     const helperResult = await callNativeHelper<CaptureResultPayload>(
       'captureNow',
       this.currentOptions(),

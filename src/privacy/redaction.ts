@@ -129,6 +129,10 @@ export function sanitizeStructuredObservation(
   return {
     ...observation,
     summary: redactSensitiveText(observation.summary) ?? REDACTED,
+    visibleAction: redactSensitiveText(observation.visibleAction),
+    possibleObjective: redactSensitiveText(observation.possibleObjective),
+    possibleProject: redactSensitiveText(observation.possibleProject),
+    possibleTask: redactSensitiveText(observation.possibleTask),
     taskHypothesis: redactSensitiveText(observation.taskHypothesis),
     sensitivityReason:
       redactSensitiveText(observation.sensitivityReason) ?? REDACTED,
@@ -136,6 +140,8 @@ export function sanitizeStructuredObservation(
     entities: {
       apps: sanitizeStringList(observation.entities.apps),
       documents: sanitizeStringList(observation.entities.documents),
+      projects: sanitizeStringList(observation.entities.projects ?? []),
+      tasks: sanitizeStringList(observation.entities.tasks ?? []),
       tickets: sanitizeStringList(observation.entities.tickets),
       repos: sanitizeStringList(observation.entities.repos),
       urls: sanitizeStringList(observation.entities.urls),

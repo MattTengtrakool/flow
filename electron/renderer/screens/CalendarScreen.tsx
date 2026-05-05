@@ -11,6 +11,7 @@ import type {
   TaskFitSuggestion,
 } from '../../../src/calendar/types';
 import type { WorklogCalendarBlock } from '../../../src/worklog/types';
+import { categoryLabel } from '../../../src/workCategories';
 import {
   addDaysIso,
   dateFromIso,
@@ -103,6 +104,61 @@ function blockPositionStyle(block: WorklogCalendarBlock): CSSProperties {
   return timeRangePositionStyle(block.startTime, block.endTime);
 }
 
+function overlapKey(block: WorklogCalendarBlock): string {
+  return `${block.startTime}:${block.endTime}:${block.id}`;
+}
+
+function layoutOverlappingBlocks(
+  blocks: WorklogCalendarBlock[],
+): Map<string, CSSProperties> {
+  const sorted = blocks.slice().sort((a, b) => {
+    const startCompare = a.startTime.localeCompare(b.startTime);
+    if (startCompare !== 0) return startCompare;
+    return a.endTime.localeCompare(b.endTime);
+  });
+  const columns: WorklogCalendarBlock[][] = [];
+  const columnByKey = new Map<string, number>();
+
+  for (const block of sorted) {
+    let columnIndex = columns.findIndex(column =>
+      column.every(existing => !blocksOverlap(existing, block)),
+    );
+    if (columnIndex === -1) {
+      columnIndex = columns.length;
+      columns.push([]);
+    }
+    columns[columnIndex].push(block);
+    columnByKey.set(overlapKey(block), columnIndex);
+  }
+
+  const styles = new Map<string, CSSProperties>();
+  for (const block of sorted) {
+    const overlapping = sorted.filter(
+      candidate => candidate.id === block.id || blocksOverlap(candidate, block),
+    );
+    const columnsForBlock = Math.max(
+      1,
+      ...overlapping.map(candidate => (columnByKey.get(overlapKey(candidate)) ?? 0) + 1),
+    );
+    const column = columnByKey.get(overlapKey(block)) ?? 0;
+    const width = 100 / columnsForBlock;
+    styles.set(overlapKey(block), {
+      ...blockPositionStyle(block),
+      left: `calc(${column * width}% + 5px)`,
+      right: `calc(${100 - (column + 1) * width}% + 5px)`,
+    });
+  }
+  return styles;
+}
+
+function blocksOverlap(a: WorklogCalendarBlock, b: WorklogCalendarBlock): boolean {
+  if (a.id === b.id) return false;
+  return (
+    Date.parse(a.startTime) < Date.parse(b.endTime) &&
+    Date.parse(b.startTime) < Date.parse(a.endTime)
+  );
+}
+
 function eventPositionStyle(event: ExternalCalendarEventView): CSSProperties {
   return timeRangePositionStyle(event.startTime, event.endTime);
 }
@@ -116,20 +172,20 @@ function timeRangePositionStyle(
   const startMinutes = start.getHours() * 60 + start.getMinutes();
   const endMinutes = end.getHours() * 60 + end.getMinutes();
   const clampedStart = Math.max(GRID_START_MINUTES, startMinutes);
-  const clampedEnd = Math.min(
-    GRID_END_MINUTES,
-    Math.max(endMinutes, clampedStart + 15),
-  );
+  const clampedEnd = Math.min(GRID_END_MINUTES, Math.max(endMinutes, clampedStart + 1));
   const top = ((clampedStart - GRID_START_MINUTES) / GRID_TOTAL_MINUTES) * 100;
   const height = Math.max(
-    4,
+    1,
     ((clampedEnd - clampedStart) / GRID_TOTAL_MINUTES) * 100,
   );
   return {
     top: `${top}%`,
     height: `${height}%`,
-    minHeight: '34px',
   };
+}
+
+function isCompactTimeBlock(block: WorklogCalendarBlock): boolean {
+  return focusedMinutes([block]) < 15;
 }
 
 
@@ -659,12 +715,19 @@ export const CalendarScreen = memo(function CalendarScreen(props: {
             </strong>
           </div>
           <div className="category-legend">
-            {['coding', 'meeting', 'research', 'other'].map(category => (
+            {[
+              'software_development',
+              'meeting',
+              'research',
+              'analysis',
+              'communication',
+              'other',
+            ].map(category => (
               <span
                 key={category}
                 className={`legend-dot category-${category}`}
               >
-                {category}
+                {categoryLabel(category)}
               </span>
             ))}
           </div>
@@ -781,6 +844,7 @@ export const CalendarScreen = memo(function CalendarScreen(props: {
             <div className="week-time-grid">
               {props.visibleDateIsos.map(dateIso => {
                 const blocks = props.blocksByDate[dateIso] ?? [];
+                const blockStyles = layoutOverlappingBlocks(blocks);
                 const externalEvents =
                   props.externalEventsByDate[dateIso] ?? [];
                 return (
@@ -837,9 +901,10 @@ export const CalendarScreen = memo(function CalendarScreen(props: {
                         <button
                           key={block.id}
                           type="button"
-                          style={blockPositionStyle(block)}
+                          style={blockStyles.get(overlapKey(block)) ?? blockPositionStyle(block)}
                           className={[
                             'time-block',
+                            isCompactTimeBlock(block) ? 'is-compact' : '',
                             categoryClass(block),
                             block.id === props.selectedBlockId ? 'active' : '',
                           ]
@@ -914,27 +979,36 @@ export const CalendarScreen = memo(function CalendarScreen(props: {
                     </button>
                   ),
                 )}
-                {props.selectedDayBlocks.map(block => (
-                  <button
-                    key={block.id}
-                    type="button"
-                    style={blockPositionStyle(block)}
-                    className={[
-                      'time-block',
-                      categoryClass(block),
-                      block.id === props.selectedBlockId ? 'active' : '',
-                    ]
-                      .filter(Boolean)
-                      .join(' ')}
-                    onClick={() => props.onSelectBlock(block)}
-                  >
-                    <span className="time-block__meta">
-                      {dayTimeFormatter.format(new Date(block.startTime))} ·{' '}
-                      {focusedMinutes([block])}m
-                    </span>
-                    <strong>{block.title}</strong>
-                  </button>
-                ))}
+                {(() => {
+                  const blockStyles = layoutOverlappingBlocks(
+                    props.selectedDayBlocks,
+                  );
+                  return props.selectedDayBlocks.map(block => (
+                    <button
+                      key={block.id}
+                      type="button"
+                      style={
+                        blockStyles.get(overlapKey(block)) ??
+                        blockPositionStyle(block)
+                      }
+                      className={[
+                        'time-block',
+                        isCompactTimeBlock(block) ? 'is-compact' : '',
+                        categoryClass(block),
+                        block.id === props.selectedBlockId ? 'active' : '',
+                      ]
+                        .filter(Boolean)
+                        .join(' ')}
+                      onClick={() => props.onSelectBlock(block)}
+                    >
+                      <span className="time-block__meta">
+                        {dayTimeFormatter.format(new Date(block.startTime))} ·{' '}
+                        {focusedMinutes([block])}m
+                      </span>
+                      <strong>{block.title}</strong>
+                    </button>
+                  ));
+                })()}
               </div>
             </div>
           </div>

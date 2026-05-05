@@ -58,11 +58,13 @@ const PLANNER_SCHEMA = {
         properties: {
           startAt: { type: 'STRING' },
           endAt: { type: 'STRING' },
+          taskKey: { type: 'STRING' },
+          lineageKey: { type: 'STRING' },
           headline: { type: 'STRING' },
           narrative: { type: 'STRING' },
           notes: { type: 'STRING' },
           label: { type: 'STRING', enum: [...WORKLOG_LABELS] },
-          category: { type: 'STRING', enum: [...CATEGORY_VALUES] },
+          category: { type: 'STRING' },
           confidence: { type: 'NUMBER' },
           keyActivities: {
             type: 'ARRAY',
@@ -80,6 +82,8 @@ const PLANNER_SCHEMA = {
             type: 'OBJECT',
             required: [
               'apps',
+              'projects',
+              'tasks',
               'repositories',
               'urls',
               'tickets',
@@ -88,6 +92,8 @@ const PLANNER_SCHEMA = {
             ],
             properties: {
               apps: { type: 'ARRAY', items: { type: 'STRING' } },
+              projects: { type: 'ARRAY', items: { type: 'STRING' } },
+              tasks: { type: 'ARRAY', items: { type: 'STRING' } },
               repositories: { type: 'ARRAY', items: { type: 'STRING' } },
               urls: { type: 'ARRAY', items: { type: 'STRING' } },
               tickets: { type: 'ARRAY', items: { type: 'STRING' } },
@@ -99,6 +105,12 @@ const PLANNER_SCHEMA = {
             type: 'ARRAY',
             items: { type: 'STRING' },
           },
+          backgroundObservationIds: {
+            type: 'ARRAY',
+            items: { type: 'STRING' },
+          },
+          assignmentReason: { type: 'STRING' },
+          timeConfidence: { type: 'NUMBER' },
           sourceClusterIds: {
             type: 'ARRAY',
             items: { type: 'STRING' },

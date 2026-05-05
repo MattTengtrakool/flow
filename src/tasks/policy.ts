@@ -1,4 +1,5 @@
 import type {ObservationView, TimelineView} from '../timeline/eventLog';
+import { isObservationBlockWorthy } from './evidence';
 import type {TaskDecisionKind} from './types';
 
 export type TaskEnginePolicy = {
@@ -7,6 +8,8 @@ export type TaskEnginePolicy = {
   minObservationConfidence: number;
   ambiguityBandLow: number;
   ambiguityBandHigh: number;
+  pendingBufferSeconds: number;
+  reassignmentWindowSeconds: number;
 };
 
 export type ForcedTaskDecision = {
@@ -21,6 +24,8 @@ export const DEFAULT_TASK_ENGINE_POLICY: TaskEnginePolicy = {
   minObservationConfidence: 0.45,
   ambiguityBandLow: 0.35,
   ambiguityBandHigh: 0.75,
+  pendingBufferSeconds: 10 * 60,
+  reassignmentWindowSeconds: 20 * 60,
 };
 
 export function evaluateHardConstraints(args: {
@@ -46,6 +51,14 @@ export function evaluateHardConstraints(args: {
   }
 
   if (currentSegment == null) {
+    if (!isObservationBlockWorthy(observation)) {
+      return {
+        decision: 'hold_pending',
+        reasonCodes: ['candidate_evidence_without_workstream'],
+        reasonText:
+          'The observation is useful evidence, but not enough by itself to create a readable work block.',
+      };
+    }
     return {
       decision: 'start_new',
       reasonCodes: ['no_active_segment'],

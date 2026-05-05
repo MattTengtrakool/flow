@@ -112,6 +112,7 @@ body:has(.companion-shell),
   height: 100%;
   min-height: 0;
   overflow: hidden;
+  pointer-events: none;
 }
 
 h1,
@@ -577,8 +578,7 @@ select:focus-visible {
     rgba(246, 248, 251, 0.88)
   );
   border: 1px solid rgba(255, 255, 255, 0.74);
-  box-shadow: 0 18px 40px rgba(15, 23, 42, 0.2),
-    0 1px 0 rgba(255, 255, 255, 0.9) inset;
+  box-shadow: 0 1px 0 rgba(255, 255, 255, 0.9) inset;
   pointer-events: auto;
 }
 
@@ -602,6 +602,8 @@ select:focus-visible {
 .companion-pill {
   align-items: center;
   border-radius: 24px;
+  box-shadow: 0 1px 5px rgba(15, 23, 42, 0.08),
+    0 1px 0 rgba(255, 255, 255, 0.9) inset;
   color: var(--text-muted);
   display: inline-flex;
   font-size: 12.5px;
@@ -686,53 +688,27 @@ select:focus-visible {
   white-space: nowrap;
 }
 
-.companion-activity-trace {
-  align-items: end;
-  display: flex;
-  gap: 3px;
-  height: 12px;
-  margin-top: 3px;
+.companion-static-status {
+  align-items: center;
+  color: var(--text-faint);
+  display: inline-flex;
+  font-size: 10.5px;
+  font-weight: 600;
+  gap: 5px;
+  margin-top: 2px;
 }
 
-.companion-activity-trace span {
-  animation: companion-trace 1600ms ease-in-out infinite;
+.companion-static-status::before {
   background: var(--text-faint);
   border-radius: var(--radius-pill);
+  content: '';
   height: 5px;
-  opacity: 0.78;
-  width: 14px;
+  opacity: 0.55;
+  width: 5px;
 }
 
-.companion-activity-trace--active span {
-  background: color-mix(in srgb, var(--accent) 72%, white);
-}
-
-.companion-activity-trace span:nth-child(2) {
-  animation-delay: 130ms;
-  height: 8px;
-}
-
-.companion-activity-trace span:nth-child(3) {
-  animation-delay: 260ms;
-  height: 4px;
-}
-
-.companion-activity-trace span:nth-child(4) {
-  animation-delay: 390ms;
-  height: 10px;
-}
-
-.companion-activity-trace span:nth-child(5) {
-  animation-delay: 520ms;
-  height: 6px;
-  width: 9px;
-}
-
-.companion-activity-trace--idle span,
-.companion-activity-trace--quiet span {
-  animation: none;
-  background: var(--text-faint);
-  opacity: 0.45;
+.companion-static-status--active::before {
+  background: var(--success);
 }
 
 .companion-drag-grip {
@@ -752,10 +728,12 @@ select:focus-visible {
 
 .companion-card {
   border-radius: var(--radius-lg);
+  box-shadow: 0 14px 34px rgba(15, 23, 42, 0.16),
+    0 1px 0 rgba(255, 255, 255, 0.9) inset;
   display: grid;
   gap: 9px;
   justify-self: stretch;
-  max-height: 170px;
+  max-height: calc(100vh - 32px);
   overflow: hidden;
   padding: 12px 12px 13px;
   position: relative;
@@ -830,6 +808,7 @@ select:focus-visible {
 }
 
 .companion-card p {
+  -webkit-app-region: no-drag;
   color: var(--text-muted);
   font-size: 12.5px;
   line-height: 1.4;
@@ -845,6 +824,7 @@ select:focus-visible {
 }
 
 .companion-card__chips {
+  -webkit-app-region: no-drag;
   display: flex;
   flex-wrap: wrap;
   gap: 5px;
@@ -867,6 +847,7 @@ select:focus-visible {
 
 .companion-card__actions {
   display: flex;
+  flex-wrap: wrap;
   gap: 8px;
   min-width: 0;
 }
@@ -934,17 +915,6 @@ select:focus-visible {
   50% {
     opacity: 1;
     transform: scale(1);
-  }
-}
-
-@keyframes companion-trace {
-  0%,
-  100% {
-    transform: scaleY(0.62);
-  }
-  50% {
-    opacity: 1;
-    transform: scaleY(1);
   }
 }
 
@@ -1503,7 +1473,11 @@ select:focus-visible {
   width: 7px;
 }
 
-.legend-dot.category-coding::before {
+.legend-dot.category-coding::before,
+.legend-dot.category-software_development::before,
+.legend-dot.category-debugging::before,
+.legend-dot.category-qa_testing::before,
+.legend-dot.category-code_review::before {
   background: #2563eb;
 }
 
@@ -1511,10 +1485,23 @@ select:focus-visible {
   background: #d97706;
 }
 
-.legend-dot.category-research::before {
+.legend-dot.category-research::before,
+.legend-dot.category-analysis::before,
+.legend-dot.category-learning::before,
+.legend-dot.category-document_review::before {
   background: #7c3aed;
 }
 
+.legend-dot.category-communication::before,
+.legend-dot.category-planning_strategy::before,
+.legend-dot.category-project_management::before,
+.legend-dot.category-sales_customer::before,
+.legend-dot.category-recruiting::before,
+.legend-dot.category-operations_admin::before,
+.legend-dot.category-finance::before,
+.legend-dot.category-design::before,
+.legend-dot.category-browsing::before,
+.legend-dot.category-file_management::before,
 .legend-dot.category-other::before {
   background: #0f766e;
 }
@@ -1833,6 +1820,14 @@ select:focus-visible {
   contain: layout paint;
 }
 
+.time-block.is-compact {
+  align-content: center;
+  display: flex;
+  gap: 6px;
+  min-height: 18px;
+  padding: 2px 6px;
+}
+
 .time-block:hover {
   box-shadow: var(--shadow-md);
   z-index: 1;
@@ -1840,11 +1835,16 @@ select:focus-visible {
 
 .time-block strong {
   font-size: 11.5px;
-  font-weight: 600;
+  font-weight: 720;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
   letter-spacing: 0;
+}
+
+.time-block.is-compact strong {
+  font-size: 11px;
+  min-width: 0;
 }
 
 .time-block span,
@@ -1853,6 +1853,11 @@ select:focus-visible {
   font-size: 10.5px;
   font-weight: 650;
   letter-spacing: 0;
+}
+
+.time-block.is-compact .time-block__meta {
+  flex-shrink: 0;
+  font-size: 10px;
 }
 
 .time-block.active {
@@ -2051,38 +2056,96 @@ select:focus-visible {
   border-color: rgba(217, 119, 6, 0.2);
 }
 
-.time-block.category-coding {
+.time-block.category-coding,
+.time-block.category-software_development,
+.time-block.category-debugging,
+.time-block.category-qa_testing,
+.time-block.category-code_review {
   border-left-color: #2563eb;
 }
 
-.category-coding .block-card__stripe {
+.category-coding .block-card__stripe,
+.category-software_development .block-card__stripe,
+.category-debugging .block-card__stripe,
+.category-qa_testing .block-card__stripe,
+.category-code_review .block-card__stripe {
   background: #2563eb;
 }
 
 .calendar-pill.category-coding,
-.time-block.category-coding {
+.calendar-pill.category-software_development,
+.calendar-pill.category-debugging,
+.calendar-pill.category-qa_testing,
+.calendar-pill.category-code_review,
+.time-block.category-coding,
+.time-block.category-software_development,
+.time-block.category-debugging,
+.time-block.category-qa_testing,
+.time-block.category-code_review {
   background: #eff6ff;
   border-color: rgba(37, 99, 235, 0.18);
 }
 
-.time-block.category-research {
+.time-block.category-research,
+.time-block.category-analysis,
+.time-block.category-learning,
+.time-block.category-document_review {
   border-left-color: #7c3aed;
 }
 
-.category-research .block-card__stripe {
+.category-research .block-card__stripe,
+.category-analysis .block-card__stripe,
+.category-learning .block-card__stripe,
+.category-document_review .block-card__stripe {
   background: #7c3aed;
 }
 
 .calendar-pill.category-research,
-.time-block.category-research {
+.calendar-pill.category-analysis,
+.calendar-pill.category-learning,
+.calendar-pill.category-document_review,
+.time-block.category-research,
+.time-block.category-analysis,
+.time-block.category-learning,
+.time-block.category-document_review {
   background: #f5f3ff;
   border-color: rgba(124, 58, 237, 0.18);
 }
 
+.category-communication .block-card__stripe,
+.category-planning_strategy .block-card__stripe,
+.category-project_management .block-card__stripe,
+.category-sales_customer .block-card__stripe,
+.category-recruiting .block-card__stripe,
+.category-operations_admin .block-card__stripe,
+.category-finance .block-card__stripe,
+.category-design .block-card__stripe,
+.category-browsing .block-card__stripe,
+.category-file_management .block-card__stripe,
 .category-other .block-card__stripe {
   background: #0f766e;
 }
+.calendar-pill.category-communication,
+.calendar-pill.category-planning_strategy,
+.calendar-pill.category-project_management,
+.calendar-pill.category-sales_customer,
+.calendar-pill.category-recruiting,
+.calendar-pill.category-operations_admin,
+.calendar-pill.category-finance,
+.calendar-pill.category-design,
+.calendar-pill.category-browsing,
+.calendar-pill.category-file_management,
 .calendar-pill.category-other,
+.time-block.category-communication,
+.time-block.category-planning_strategy,
+.time-block.category-project_management,
+.time-block.category-sales_customer,
+.time-block.category-recruiting,
+.time-block.category-operations_admin,
+.time-block.category-finance,
+.time-block.category-design,
+.time-block.category-browsing,
+.time-block.category-file_management,
 .time-block.category-other {
   background: #ecfdf5;
   border-color: rgba(15, 118, 110, 0.18);
@@ -2095,6 +2158,60 @@ select:focus-visible {
   flex-wrap: wrap;
   gap: 4px;
   margin-top: 1px;
+}
+
+.audit-list {
+  display: grid;
+  gap: 8px;
+}
+
+.audit-row {
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--border-strong);
+  border-radius: var(--radius-md);
+  display: grid;
+  gap: 8px;
+  padding: 10px 12px;
+}
+
+.audit-row.assigned {
+  border-left-color: var(--accent);
+}
+
+.audit-row.pending {
+  border-left-color: var(--warning);
+}
+
+.audit-row.ignored {
+  border-left-color: var(--text-faint);
+  opacity: 0.76;
+}
+
+.audit-row__meta {
+  align-items: center;
+  color: var(--text-faint);
+  display: flex;
+  flex-wrap: wrap;
+  font-size: var(--font-caption);
+  font-weight: 650;
+  gap: 6px;
+  text-transform: uppercase;
+}
+
+.audit-row__meta code {
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--text-muted);
+  font-family: inherit;
+  padding: 1px 5px;
+  text-transform: none;
+}
+
+.audit-row__body {
+  display: grid;
+  gap: 5px;
 }
 
 .chip {

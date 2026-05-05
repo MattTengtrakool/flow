@@ -1,3 +1,4 @@
+export { AuditScreen } from './AuditScreen';
 export { CalendarScreen } from './CalendarScreen';
 export { ChatScreen } from './ChatScreen';
 export { InsightsScreen } from './InsightsScreen';

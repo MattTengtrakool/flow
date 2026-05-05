@@ -1,4 +1,6 @@
 export type TaskTitleArtifacts = {
+  tasks?: readonly string[];
+  projects?: readonly string[];
   tickets?: readonly string[];
   repositories?: readonly string[];
   urls?: readonly string[];
@@ -108,6 +110,13 @@ export function synthesizeTaskTitleFromArtifacts(
   if (artifacts == null) return null;
 
   const topic = guessShortTopic(args.title, args.keyActivities);
+  const task = firstValue(artifacts.tasks);
+  if (task != null) {
+    return topic != null && task.toLowerCase() !== topic.toLowerCase()
+      ? `${task}: ${topic}`
+      : task;
+  }
+
   const ticket = firstValue(artifacts.tickets);
   if (ticket != null) {
     return topic != null ? `${ticket}: ${topic}` : ticket;
@@ -121,6 +130,13 @@ export function synthesizeTaskTitleFromArtifacts(
   const document = artifacts.documents?.find(isDistinctiveDocument);
   if (document != null) {
     return titleFromDocument(document);
+  }
+
+  const project = firstValue(artifacts.projects);
+  if (project != null) {
+    return topic != null && project.toLowerCase() !== topic.toLowerCase()
+      ? `${project}: ${topic}`
+      : project;
   }
 
   const repo = firstValue(artifacts.repositories);

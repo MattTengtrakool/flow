@@ -1,4 +1,4 @@
-import { BrowserWindow, ipcMain, safeStorage, shell } from 'electron';
+import { ipcMain, safeStorage, shell } from 'electron';
 import { EventEmitter } from 'node:events';
 import fs from 'node:fs/promises';
 import http from 'node:http';
@@ -26,6 +26,7 @@ import type {
 } from '../../../src/calendar/types';
 import { redactSensitiveText } from '../../../src/privacy/redaction';
 import { getAppDataDirectoryPath } from '../appProfile';
+import { sendToAllWindows } from '../windowRegistry';
 
 const GOOGLE_AUTH_URL = 'https://accounts.google.com/o/oauth2/v2/auth';
 const GOOGLE_TOKEN_URL = 'https://oauth2.googleapis.com/token';
@@ -50,8 +51,6 @@ type StoredSecret = {
   encrypted: boolean;
 };
 
-type StoredCalendarSourceMode = CalendarSourceMode | 'task_context';
-
 type StoredGoogleAccount = {
   id: string;
   email: string;
@@ -60,7 +59,7 @@ type StoredGoogleAccount = {
   refreshToken: StoredSecret;
   syncTokens: Record<string, string>;
   calendarSelections: Record<string, boolean>;
-  calendarSourceModes?: Record<string, StoredCalendarSourceMode>;
+  calendarSourceModes?: Record<string, CalendarSourceMode>;
 };
 
 type StoredCalendarIntegrations = {
@@ -763,9 +762,7 @@ class GoogleCalendarService extends EventEmitter<CalendarEvents> {
   private broadcast() {
     const payload = this.publicState();
     this.emit('changed', payload);
-    for (const window of BrowserWindow.getAllWindows()) {
-      window.webContents.send('flow:calendar:stateChanged', payload);
-    }
+    sendToAllWindows('flow:calendar:stateChanged', payload);
   }
 
   private async ensureLoaded() {
@@ -1114,9 +1111,8 @@ function normalizeCachedSource(source: CalendarSourceView): CalendarSourceView {
 }
 
 function normalizeCalendarSourceMode(
-  value: StoredCalendarSourceMode | null | undefined,
+  value: CalendarSourceMode | null | undefined,
 ): CalendarSourceMode {
-  if (value === 'task_context') return 'scheduled';
   if (value === 'scheduled' || value === 'context_only') return value;
   return 'ignored';
 }
@@ -1131,7 +1127,7 @@ function normalizeStoredAnnotation(
       annotation.modeOverride == null
         ? null
         : normalizeCalendarSourceMode(
-            annotation.modeOverride as StoredCalendarSourceMode,
+            annotation.modeOverride as CalendarSourceMode,
           ),
     confirmedBlockIds: annotation.confirmedBlockIds ?? [],
     dismissedBlockIds: annotation.dismissedBlockIds ?? [],

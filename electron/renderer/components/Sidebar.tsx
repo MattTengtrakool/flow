@@ -86,6 +86,29 @@ function IconChat({ className }: IconProps) {
   );
 }
 
+function IconAudit({ className }: IconProps) {
+  return (
+    <svg
+      width="15"
+      height="15"
+      viewBox="0 0 15 15"
+      fill="none"
+      aria-hidden="true"
+      className={className}
+    >
+      <path
+        d="M3 2.5h9M3 7.5h9M3 12.5h9"
+        stroke="currentColor"
+        strokeWidth="1.25"
+        strokeLinecap="round"
+      />
+      <circle cx="1.5" cy="2.5" r="0.75" fill="currentColor" />
+      <circle cx="1.5" cy="7.5" r="0.75" fill="currentColor" />
+      <circle cx="1.5" cy="12.5" r="0.75" fill="currentColor" />
+    </svg>
+  );
+}
+
 function IconInsights({ className }: IconProps) {
   return (
     <svg
@@ -161,6 +184,7 @@ const NAV_ITEMS: Array<{
 }> = [
   { key: 'today', label: 'Today', Icon: IconToday },
   { key: 'calendar', label: 'Calendar', Icon: IconCalendar },
+  { key: 'audit', label: 'Audit', Icon: IconAudit },
   { key: 'chat', label: 'Chat', Icon: IconChat },
   { key: 'insights', label: 'Insights', Icon: IconInsights },
   { key: 'settings', label: 'Settings', Icon: IconSettings },

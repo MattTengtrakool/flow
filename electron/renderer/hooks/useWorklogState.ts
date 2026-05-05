@@ -1,16 +1,11 @@
-import { useCallback, useMemo, useState } from 'react';
+import { startTransition, useCallback, useEffect, useMemo, useState } from 'react';
 
-import { computeCostSummary } from '../../../src/planner/costSummary';
 import {
-  buildCalendarReconciliation,
-  buildTaskFitSuggestions,
-  getCalendarEventMode,
-  getCalendarEventsInRange,
-} from '../../../src/calendar/calendarLogic';
-import {
-  getAllCalendarItemBlocks,
-  getCalendarItemBlocksForDates,
-} from '../../../src/calendar/selectors';
+  computeCostSummary,
+  type CostSummary,
+} from '../../../src/planner/costSummary';
+import { getCalendarEventMode } from '../../../src/calendar/calendarLogic';
+import { getAllCalendarItemBlocks } from '../../../src/calendar/selectors';
 import type {
   CalendarEventAnnotationPatch,
   CalendarEventAnnotationView,
@@ -19,22 +14,20 @@ import type {
   CalendarSourceView,
   ExternalCalendarEventView,
 } from '../../../src/calendar/types';
-import {
-  getAllPlanCalendarBlocks,
-  getWorklogForDates,
-} from '../../../src/planner/selectors';
+import { getAllPlanCalendarBlocks } from '../../../src/planner/selectors';
 import { computeBlockNotesKey } from '../../../src/planner/types';
 import type { TimelineView } from '../../../src/timeline/eventLog';
 import type { WorklogCalendarBlock } from '../../../src/worklog/types';
 import {
   addDaysIso,
   addMonthsIso,
-  dateFromIso,
   dateRangeForView,
   focusedMinutes,
   toDateIso,
 } from '../dateUtils';
 import type { CalendarDisplayItemView, CalendarView, NavKey } from '../types';
+import type { FlowElectronApi, WorklogViewPayload } from '../../shared/flowApi';
+import type { WorkCategoryOption } from '../../../src/workCategories';
 
 function mergeBlockLists(
   first: WorklogCalendarBlock[],
@@ -45,23 +38,20 @@ function mergeBlockLists(
   );
 }
 
-function mergeBlocksByDate(
-  dateIsos: string[],
-  first: Record<string, WorklogCalendarBlock[]>,
-  second: Record<string, WorklogCalendarBlock[]>,
-): Record<string, WorklogCalendarBlock[]> {
-  const result: Record<string, WorklogCalendarBlock[]> = {};
-  for (const dateIso of dateIsos) {
-    result[dateIso] = mergeBlockLists(
-      first[dateIso] ?? [],
-      second[dateIso] ?? [],
-    );
-  }
-  return result;
-}
+const EMPTY_COST_SUMMARY: CostSummary = {
+  allTime: { inputTokens: 0, outputTokens: 0, costUsd: 0, planCount: 0 },
+  last7Days: { inputTokens: 0, outputTokens: 0, costUsd: 0, planCount: 0 },
+  last30Days: { inputTokens: 0, outputTokens: 0, costUsd: 0, planCount: 0 },
+  byProvider: [],
+  lastPlan: null,
+  firstPlanAt: null,
+  pricedPlanCount: 0,
+  unpricedPlanCount: 0,
+};
 
 export function useWorklogState(args: {
   activeNav: NavKey;
+  flow: FlowElectronApi;
   timeline: TimelineView;
   calendarEvents: ExternalCalendarEventView[];
   calendarSources: CalendarSourceView[];
@@ -75,15 +65,17 @@ export function useWorklogState(args: {
     blockId: string,
     action: CalendarEventBlockLinkAction,
   ) => Promise<unknown>;
+  customCategories: WorkCategoryOption[];
 }) {
   const {
     activeNav,
+    flow,
     calendarAnnotations,
-    calendarEvents,
     calendarSources,
     timeline,
     updateEventAnnotation,
     updateEventBlockLink,
+    customCategories,
   } = args;
   const [selectedDateIso, setSelectedDateIso] = useState(() =>
     toDateIso(new Date()),
@@ -106,75 +98,43 @@ export function useWorklogState(args: {
     () => Intl.DateTimeFormat().resolvedOptions().timeZone ?? 'UTC',
     [],
   );
-  const observedBlocksByDate = useMemo(
-    () => getWorklogForDates(timeline, visibleDateIsos, timezone),
-    [timeline, visibleDateIsos, timezone],
-  );
-  const localCalendarBlocksByDate = useMemo(
-    () => getCalendarItemBlocksForDates(timeline, visibleDateIsos, timezone),
-    [timeline, visibleDateIsos, timezone],
-  );
-  const blocksByDate = useMemo(
-    () =>
-      mergeBlocksByDate(
-        visibleDateIsos,
-        observedBlocksByDate,
-        localCalendarBlocksByDate,
-      ),
-    [localCalendarBlocksByDate, observedBlocksByDate, visibleDateIsos],
-  );
-  const allBlocks = useMemo(
-    () =>
-      mergeBlockLists(
-        getAllPlanCalendarBlocks(timeline),
-        getAllCalendarItemBlocks(timeline, timezone),
-      ),
-    [timeline, timezone],
-  );
-  const costSummary = useMemo(() => computeCostSummary(timeline), [timeline]);
-  const visibleRange = useMemo(
-    () => rangeForDateIsos(visibleDateIsos),
-    [visibleDateIsos],
-  );
-  const visibleCalendarEvents = useMemo(() => {
-    const sourceById = new Map(
-      calendarSources.map(source => [source.id, source]),
-    );
-    const annotationByEventId = new Map(
-      calendarAnnotations.map(annotation => [annotation.eventId, annotation]),
-    );
-    return getCalendarEventsInRange(
-      calendarEvents,
-      visibleRange.startIso,
-      visibleRange.endIso,
-    ).filter(
-      event =>
-        getCalendarEventMode(
-          event,
-          sourceById.get(event.sourceId),
-          annotationByEventId.get(event.id),
-        ) !== 'ignored',
-    );
-  }, [calendarAnnotations, calendarEvents, calendarSources, visibleRange]);
-  const externalEventsByDate = useMemo(
-    () =>
-      groupCalendarEventsByDate(
-        visibleCalendarEvents,
-        visibleDateIsos,
-        timezone,
-      ),
-    [visibleCalendarEvents, visibleDateIsos, timezone],
-  );
-  const calendarDisplayItemsByDate = useMemo(
-    () =>
-      buildCalendarDisplayItemsByDate({
-        blocksByDate,
-        eventsByDate: externalEventsByDate,
-        sources: calendarSources,
-        annotations: calendarAnnotations,
-      }),
-    [blocksByDate, calendarAnnotations, calendarSources, externalEventsByDate],
-  );
+  const needsVisibleWorklog = activeNav === 'today' || activeNav === 'calendar';
+  const [worklogView, setWorklogView] = useState<WorklogViewPayload | null>(null);
+  const [worklogViewLoading, setWorklogViewLoading] = useState(false);
+  const worklogRequestKey = `${visibleDateIsos.join(',')}|${timezone}|${
+    timeline.planSnapshots.at(-1)?.snapshotId ?? 'none'
+  }|${timeline.calendarItemOrder.length}|${
+    Object.keys(timeline.userBlockCorrections).length
+  }|${timeline.taskSegmentOrder.length}`;
+
+  useEffect(() => {
+    if (!needsVisibleWorklog) return;
+    let cancelled = false;
+    setWorklogViewLoading(true);
+    flow.timeline
+      .getWorklogView({ dateIsos: visibleDateIsos, timezone })
+      .then(view => {
+        if (cancelled) return;
+        startTransition(() => {
+          setWorklogView(view);
+          setWorklogViewLoading(false);
+        });
+      })
+      .catch(() => {
+        if (!cancelled) setWorklogViewLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [flow, needsVisibleWorklog, timezone, visibleDateIsos, worklogRequestKey]);
+
+  const blocksByDate = useMemo(() => {
+    if (!needsVisibleWorklog) return {};
+    if (needsVisibleWorklog && worklogView != null) {
+      return worklogView.blocksByDate;
+    }
+    return {};
+  }, [needsVisibleWorklog, worklogView]);
   const visibleBlocks = useMemo(
     () =>
       Array.from(
@@ -186,23 +146,78 @@ export function useWorklogState(args: {
       ),
     [blocksByDate],
   );
-  const reconciliation: CalendarReconciliationView = useMemo(
+  const needsCalendarIntelligence = needsVisibleWorklog;
+  const needsGlobalBlocks = activeNav === 'chat' || activeNav === 'insights';
+  const allBlocks = useMemo(
+    () => {
+      if (!needsGlobalBlocks) return visibleBlocks;
+      return mergeBlockLists(
+        getAllPlanCalendarBlocks(timeline),
+        getAllCalendarItemBlocks(timeline, timezone),
+      );
+    },
+    [needsGlobalBlocks, timeline, timezone, visibleBlocks],
+  );
+  const costSummary = useMemo(
     () =>
-      buildCalendarReconciliation({
-        blocks: visibleBlocks,
-        events: visibleCalendarEvents,
+      activeNav === 'settings' || activeNav === 'insights'
+        ? computeCostSummary(timeline)
+        : EMPTY_COST_SUMMARY,
+    [activeNav, timeline],
+  );
+  const visibleCalendarEvents = useMemo(() => {
+    if (needsCalendarIntelligence && worklogView != null) {
+      return Object.values(worklogView.externalEventsByDate).flat();
+    }
+    return [];
+  }, [needsCalendarIntelligence, worklogView]);
+  const externalEventsByDate = useMemo(
+    () =>
+      needsCalendarIntelligence && worklogView != null
+        ? worklogView.externalEventsByDate
+        : groupCalendarEventsByDate(visibleCalendarEvents, visibleDateIsos, timezone),
+    [
+      needsCalendarIntelligence,
+      visibleCalendarEvents,
+      visibleDateIsos,
+      timezone,
+      worklogView,
+    ],
+  );
+  const calendarDisplayItemsByDate = useMemo(
+    () => {
+      if (!needsCalendarIntelligence) return {};
+      return buildCalendarDisplayItemsByDate({
+        blocksByDate,
+        eventsByDate: externalEventsByDate,
         sources: calendarSources,
         annotations: calendarAnnotations,
-        rangeStartIso: visibleRange.startIso,
-        rangeEndIso: visibleRange.endIso,
-      }),
+      });
+    },
     [
+      blocksByDate,
       calendarAnnotations,
       calendarSources,
-      visibleBlocks,
-      visibleCalendarEvents,
-      visibleRange,
+      externalEventsByDate,
+      needsCalendarIntelligence,
     ],
+  );
+  const reconciliation: CalendarReconciliationView = useMemo(
+    () => {
+      if (needsCalendarIntelligence && worklogView != null) {
+        return worklogView.reconciliation;
+      }
+      return {
+        links: [],
+        scheduledItems: [],
+        totals: {
+          observedFocusMinutes: 0,
+          scheduledBusyMinutes: 0,
+          observedWithinScheduledMinutes: 0,
+        },
+      };
+    },
+    [needsCalendarIntelligence, worklogView],
   );
 
   const selectedDayBlocks = blocksByDate[selectedDateIso] ?? [];
@@ -227,7 +242,7 @@ export function useWorklogState(args: {
       : null;
   const selectedBlock =
     selectedExternalEvent == null
-      ? allBlocks.find(block => block.id === selectedBlockId) ??
+      ? visibleBlocks.find(block => block.id === selectedBlockId) ??
         selectedDayBlocks[0] ??
         null
       : null;
@@ -287,22 +302,13 @@ export function useWorklogState(args: {
     visibleBlocks,
   ]);
   const taskFitSuggestions = useMemo(
-    () =>
-      buildTaskFitSuggestions({
-        blocks: allBlocks,
-        events: visibleCalendarEvents,
-        sources: calendarSources,
-        annotations: calendarAnnotations,
-        rangeStartIso: visibleRange.startIso,
-        rangeEndIso: visibleRange.endIso,
-      }),
-    [
-      allBlocks,
-      calendarAnnotations,
-      calendarSources,
-      visibleCalendarEvents,
-      visibleRange,
-    ],
+    () => {
+      if (needsCalendarIntelligence && worklogView != null) {
+        return worklogView.taskFitSuggestions;
+      }
+      return [];
+    },
+    [needsCalendarIntelligence, worklogView],
   );
 
   const goToToday = useCallback(() => {
@@ -425,6 +431,7 @@ export function useWorklogState(args: {
       selectedObservationIds,
       selectedCalendarEvents: selectedBlockCalendarEvents,
       calendarReconciliation: reconciliation,
+      customCategories,
       visible: activeNav === 'today' || activeNav === 'calendar',
       onEditNotes: editNotes,
       onCorrectBlock: correctBlock,
@@ -447,6 +454,7 @@ export function useWorklogState(args: {
       reconciliation,
       updateEventAnnotation,
       updateEventBlockLink,
+      customCategories,
     ],
   );
 
@@ -469,6 +477,7 @@ export function useWorklogState(args: {
     selectedDayBlocks,
     selectedFocusedMinutes,
     taskFitSuggestions,
+    worklogViewLoading,
     shiftCalendar,
     selectCalendarBlock,
     selectDate,
@@ -522,21 +531,6 @@ function buildCalendarDisplayItemsByDate(args: {
     result[dateIso] = [...observedItems, ...eventItems];
   }
   return result;
-}
-
-function rangeForDateIsos(dateIsos: string[]): {
-  startIso: string;
-  endIso: string;
-} {
-  const first = dateIsos[0] ?? toDateIso(new Date());
-  const last = dateIsos[dateIsos.length - 1] ?? first;
-  const start = dateFromIso(first);
-  const end = dateFromIso(last);
-  end.setDate(end.getDate() + 1);
-  return {
-    startIso: start.toISOString(),
-    endIso: end.toISOString(),
-  };
 }
 
 function groupCalendarEventsByDate(

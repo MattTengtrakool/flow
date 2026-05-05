@@ -1,13 +1,15 @@
-import { BrowserWindow, ipcMain } from 'electron';
+import { ipcMain } from 'electron';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 
 import {
   MEETING_DETECTION_DEDUPE_MS,
-  detectLikelyMeeting,
+  detectLikelyMeetingFromRecentSources,
+  type MeetingDetectionContextSource,
 } from '../../../src/meetings/detection';
 import type {
   MeetingAudioChunkMetadata,
+  MeetingAudioSource,
   MeetingDetection,
   MeetingPermissionState,
   MeetingRecording,
@@ -18,24 +20,27 @@ import type {
 import {
   createDomainId,
   createOccurredAt,
-  getCurrentContext,
+  type CaptureRecordView,
+  type ContextSnapshotView,
+  type TimelineView,
 } from '../../../src/timeline/eventLog';
+import type { ContextSnapshotPayload } from '../../../src/types/contextCapture';
 import {
   summarizeManagedMeeting,
   transcribeManagedAudioChunk,
 } from '../ai/managedAiClient';
-import {
-  getAppDataDirectoryPath,
-  getCompanionWindowTitle,
-} from '../appProfile';
+import { getAppDataDirectoryPath } from '../appProfile';
 import { calendarService } from '../calendar/googleCalendarService';
 import { captureClient } from '../capture/captureService';
 import { settingsService } from '../settings/settingsService';
 import { timelineService } from '../timeline/timelineService';
+import { sendToAllWindows } from '../windowRegistry';
+import { showMainWindow } from '../windowRegistry';
 import { nativeAudioClient } from './nativeAudioClient';
 
 const DETECTION_EVALUATE_INTERVAL_MS = 15_000;
-const AUDIO_CHUNK_SECONDS = 15;
+const DETECTION_SOURCE_LOOKBACK_MS = 90_000;
+const DETECTION_SOURCE_LIMIT = 120;
 const FINALIZATION_WAIT_TIMEOUT_MS = 2 * 60_000;
 const SUMMARY_REQUEST_TIMEOUT_MS = 90_000;
 
@@ -46,8 +51,10 @@ class MeetingTranscriptionService {
     helperAvailable: nativeAudioClient.helperAvailable(),
     screenCaptureGranted: null,
     microphoneGranted: null,
+    microphoneStatus: 'unknown',
   };
   private lastError: string | null = null;
+  private lastBroadcastKey: string | null = null;
 
   hydrate() {
     this.ensureTimer();
@@ -85,10 +92,14 @@ class MeetingTranscriptionService {
     await this.refreshPermissionState();
     const settings = settingsService.publicSettings();
     const meetingSettings = settings.meetingAssistant;
-    const sources = [
-      ...(meetingSettings.systemAudioEnabled ? ['system' as const] : []),
-      ...(meetingSettings.microphoneEnabled ? ['microphone' as const] : []),
-    ];
+    const requestedSources = normalizeAudioSources(args.sources);
+    const sources =
+      requestedSources.length > 0
+        ? requestedSources
+        : [
+            ...(meetingSettings.systemAudioEnabled ? ['system' as const] : []),
+            ...(meetingSettings.microphoneEnabled ? ['microphone' as const] : []),
+          ];
 
     if (!meetingSettings.enabled) {
       return this.failStart('Meeting assistant is turned off.');
@@ -113,19 +124,17 @@ class MeetingTranscriptionService {
         'Meeting audio helper is not built. Run pnpm native-audio:build and restart Flow.',
       );
     }
-    if (
-      meetingSettings.systemAudioEnabled &&
-      this.permissionState.screenCaptureGranted === false
-    ) {
-      return this.failStart(
-        'Screen Recording permission is required for meeting audio.',
-      );
+    if (needsPermissionPrompt(sources, this.permissionState)) {
+      this.permissionState = await nativeAudioClient.requestPermissions(sources);
+      this.broadcast();
     }
-    if (
-      meetingSettings.microphoneEnabled &&
-      this.permissionState.microphoneGranted === false
-    ) {
-      return this.failStart('Microphone permission is required.');
+    if (sources.includes('microphone') && !this.permissionState.microphoneGranted) {
+      return this.failStart(microphonePermissionMessage(this.permissionState));
+    }
+    if (sources.includes('system') && !this.permissionState.screenCaptureGranted) {
+      return this.failStart(
+        'Screen Recording permission is required for meeting audio. If macOS did not show a prompt, open System Settings > Privacy & Security > Screen Recording, enable FlowAudioCapture, then restart Flow.',
+      );
     }
 
     if (
@@ -159,7 +168,7 @@ class MeetingTranscriptionService {
       detectionId: detection?.id ?? null,
       startedAt: createOccurredAt(),
       stoppedAt: null,
-      status: 'starting',
+      status: 'recording',
       appName: detection?.appName ?? null,
       bundleIdentifier: detection?.bundleIdentifier ?? null,
       windowTitle: detection?.windowTitle ?? null,
@@ -182,7 +191,6 @@ class MeetingTranscriptionService {
     const started = nativeAudioClient.startCapture({
       meetingId,
       sources,
-      chunkSeconds: AUDIO_CHUNK_SECONDS,
       outputDirectory,
       onEvent: event => {
         this.handleNativeEvent(event).catch(() => {});
@@ -264,11 +272,12 @@ class MeetingTranscriptionService {
     }
 
     const timeline = timelineService.getTimelineForServices();
-    const detection = detectLikelyMeeting({
-      context: getCurrentContext(timeline),
+    const detection = detectLikelyMeetingFromRecentSources({
+      sources: collectRecentMeetingSources(timeline),
       calendar: await calendarService.getState(),
       enabledApps: settings.meetingAssistant.enabledApps,
       dismissedDedupeKeys: this.dismissedDedupeKeys(),
+      maxAgeMs: DETECTION_SOURCE_LOOKBACK_MS,
     });
     if (
       detection != null &&
@@ -298,6 +307,12 @@ class MeetingTranscriptionService {
         } & MeetingAudioChunkMetadata)
       | { type: string; meetingId?: string; message?: string },
   ) {
+    if (event.type === 'audio_capture_started') {
+      this.lastError = null;
+      this.broadcast();
+      return;
+    }
+
     if (event.type === 'audio_capture_failed') {
       const meetingId = event.meetingId ?? this.getActiveRecording()?.meetingId;
       if (meetingId == null) return;
@@ -314,6 +329,11 @@ class MeetingTranscriptionService {
           occurredAt: createOccurredAt(),
         },
       ]);
+      this.broadcast();
+      return;
+    }
+
+    if (event.type === 'audio_capture_stopped') {
       this.broadcast();
       return;
     }
@@ -375,8 +395,8 @@ class MeetingTranscriptionService {
         },
       ]);
       await this.cleanupAudioChunk(chunk.filePath);
-      this.lastError = null;
       await this.finalizeMeetingIfStopped(chunk.meetingId);
+      this.lastError = null;
     } catch (error) {
       const message =
         error instanceof Error ? error.message : 'Audio transcription failed.';
@@ -654,9 +674,10 @@ class MeetingTranscriptionService {
 
   private broadcast() {
     const payload = this.publicState();
-    for (const window of BrowserWindow.getAllWindows()) {
-      window.webContents.send('flow:meetings:stateChanged', payload);
-    }
+    const key = JSON.stringify(payload);
+    if (key === this.lastBroadcastKey) return;
+    this.lastBroadcastKey = key;
+    sendToAllWindows('flow:meetings:stateChanged', payload);
   }
 }
 
@@ -664,6 +685,43 @@ function isAudioChunkReadyEvent(event: {
   type: string;
 }): event is { type: 'audio_chunk_ready' } & MeetingAudioChunkMetadata {
   return event.type === 'audio_chunk_ready' && 'chunkId' in event;
+}
+
+function normalizeAudioSources(
+  sources: StartMeetingTranscriptionArgs['sources'],
+): Array<'system' | 'microphone'> {
+  if (!Array.isArray(sources)) return [];
+  const normalized: Array<'system' | 'microphone'> = [];
+  for (const source of sources) {
+    if (
+      (source === 'system' || source === 'microphone') &&
+      !normalized.includes(source)
+    ) {
+      normalized.push(source);
+    }
+  }
+  return normalized;
+}
+
+function needsPermissionPrompt(
+  sources: MeetingAudioSource[],
+  state: MeetingPermissionState,
+): boolean {
+  return (
+    (sources.includes('microphone') &&
+      state.microphoneStatus === 'not_determined') ||
+    (sources.includes('system') && state.screenCaptureGranted === false)
+  );
+}
+
+function microphonePermissionMessage(state: MeetingPermissionState): string {
+  if (state.microphoneStatus === 'denied') {
+    return 'Microphone permission is denied. Open System Settings > Privacy & Security > Microphone, enable FlowAudioCapture, then restart Flow.';
+  }
+  if (state.microphoneStatus === 'restricted') {
+    return 'Microphone permission is restricted by macOS policy.';
+  }
+  return 'Microphone permission is required. If macOS did not show a prompt, reset Microphone permission for FlowAudioCapture and try again.';
 }
 
 function withTimeout<T>(
@@ -688,6 +746,63 @@ function withTimeout<T>(
       },
     );
   });
+}
+
+function collectRecentMeetingSources(
+  timeline: TimelineView,
+): MeetingDetectionContextSource[] {
+  const sources: MeetingDetectionContextSource[] = [];
+  for (let i = timeline.contextSnapshotOrder.length - 1; i >= 0; i -= 1) {
+    const snapshot =
+      timeline.contextSnapshotsById[timeline.contextSnapshotOrder[i]];
+    if (snapshot == null) continue;
+    sources.push({
+      context: contextFromSnapshot(snapshot),
+      observedAt: snapshot.recordedAt,
+    });
+    if (sources.length >= DETECTION_SOURCE_LIMIT) return sources;
+  }
+
+  for (let i = timeline.captureRecordOrder.length - 1; i >= 0; i -= 1) {
+    const record = timeline.captureRecordsById[timeline.captureRecordOrder[i]];
+    if (record == null || record.capture.status !== 'captured') continue;
+    sources.push({
+      context: contextFromCapture(record),
+      observedAt: record.capturedAt,
+    });
+    if (sources.length >= DETECTION_SOURCE_LIMIT) return sources;
+  }
+
+  return sources;
+}
+
+function contextFromSnapshot(
+  snapshot: ContextSnapshotView,
+): ContextSnapshotPayload {
+  const context = { ...snapshot } as ContextSnapshotPayload & { id?: string };
+  delete context.id;
+  return context;
+}
+
+function contextFromCapture(record: CaptureRecordView): ContextSnapshotPayload {
+  const capture = record.capture;
+  return {
+    hostBundleIdentifier: null,
+    hostBundlePath: null,
+    appName: capture.appName,
+    bundleIdentifier: capture.bundleIdentifier,
+    processId: capture.processId,
+    windowTitle: capture.windowTitle,
+    windowFrame: null,
+    source: capture.targetType === 'application' ? 'app' : 'window',
+    preciseModeEnabled: true,
+    accessibilityTrusted: true,
+    captureAccessGranted: capture.status === 'captured',
+    isIdle: false,
+    idleSeconds: 0,
+    changeReasons: [],
+    recordedAt: record.capturedAt,
+  };
 }
 
 async function meetingAudioDirectoryPath(): Promise<string> {
@@ -715,15 +830,4 @@ export function registerMeetingIpcHandlers() {
     showMainWindow();
     return meetingTranscriptionService.getState();
   });
-}
-
-function showMainWindow() {
-  const companionTitle = getCompanionWindowTitle();
-  const window = BrowserWindow.getAllWindows().find(
-    candidate => candidate.getTitle() !== companionTitle,
-  );
-  if (window != null) {
-    window.show();
-    window.focus();
-  }
 }

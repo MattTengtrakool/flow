@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState, type RefObject } from 'react';
 
 import type {
   ProactiveInsightAction,
@@ -8,17 +8,27 @@ import type {
   FlowElectronApi,
   TimelineStatePayload,
 } from '../../shared/flowApi';
-import type { MeetingRuntimeState } from '../../../src/meetings/types';
+import type {
+  MeetingAudioSource,
+  MeetingRuntimeState,
+} from '../../../src/meetings/types';
 import { useMeetingState } from '../hooks/useMeetingState';
 import { useProactiveState } from '../hooks/useProactiveState';
 
 const flowIconUrl = new URL('../../../brand/flow-icon-64.png', import.meta.url)
   .href;
+const COMPANION_WINDOW_WIDTH = {
+  pill: 276,
+  card: 404,
+} as const;
+const COMPANION_WINDOW_VERTICAL_PADDING = 32;
+type CompanionContentMode = keyof typeof COMPANION_WINDOW_WIDTH;
 
 export function CompanionApp(props: { flow?: FlowElectronApi }) {
   const proactive = useProactiveState(props.flow);
   const meetings = useMeetingState(props.flow);
   const runtime = useCompanionRuntime(props.flow, proactive.quieted);
+  const shellRef = useRef<HTMLElement | null>(null);
   const insight = proactive.activeInsight;
   const meetingMode =
     meetings.activeRecording != null
@@ -26,6 +36,16 @@ export function CompanionApp(props: { flow?: FlowElectronApi }) {
       : meetings.currentDetection != null
       ? 'detected'
       : null;
+  const contentMode: CompanionContentMode =
+    meetingMode != null || insight != null ? 'card' : 'pill';
+
+  useCompanionContentSize(
+    props.flow,
+    shellRef,
+    contentMode,
+    proactive.companionEnabled,
+  );
+  useCompanionMousePassthrough(props.flow, proactive.companionEnabled);
 
   if (!proactive.companionEnabled) {
     return null;
@@ -33,13 +53,14 @@ export function CompanionApp(props: { flow?: FlowElectronApi }) {
 
   return (
     <main
-      className={`companion-shell companion-shell--${proactive.settings.companionPosition}`}
+      ref={shellRef}
+      className={`companion-shell companion-shell--${proactive.settings.companionPosition} companion-shell--${contentMode}`}
     >
       {meetingMode != null ? (
         <MeetingCard
           mode={meetingMode}
           meetings={meetings}
-          onStart={() => {
+          onStart={sources => {
             const detectionId = meetings.currentDetection?.id;
             const consentAccepted =
               meetings.consentAccepted ||
@@ -48,7 +69,7 @@ export function CompanionApp(props: { flow?: FlowElectronApi }) {
               );
             if (!consentAccepted) return;
             meetings
-              .startTranscription(detectionId, consentAccepted)
+              .startTranscription(detectionId, consentAccepted, sources)
               .catch(() => {});
           }}
           onStop={() => {
@@ -75,7 +96,9 @@ export function CompanionApp(props: { flow?: FlowElectronApi }) {
           <span className="companion-pill__body">
             <span>{runtime.eyebrow}</span>
             <strong>{runtime.label}</strong>
-            <ActivityTrace state={runtime.state} />
+            <span className={`companion-static-status companion-static-status--${runtime.state}`}>
+              {runtime.state === 'active' ? 'Active' : 'Idle'}
+            </span>
           </span>
           <DragGrip />
         </section>
@@ -99,29 +122,135 @@ export function CompanionApp(props: { flow?: FlowElectronApi }) {
   );
 }
 
+function useCompanionMousePassthrough(
+  flow: FlowElectronApi | undefined,
+  enabled: boolean,
+) {
+  useEffect(() => {
+    if (flow == null) return;
+    if (!enabled) {
+      flow.companion.setMouseEventsIgnored(true).catch(() => {});
+      return;
+    }
+
+    let ignored = true;
+    const setIgnored = (next: boolean) => {
+      if (ignored === next) return;
+      ignored = next;
+      flow.companion.setMouseEventsIgnored(next).catch(() => {});
+    };
+    const handleMouseMove = (event: MouseEvent) => {
+      const target = event.target;
+      const interactive =
+        target instanceof Element &&
+        target.closest('.companion-pill, .companion-card') != null;
+      setIgnored(!interactive);
+    };
+    const handleMouseLeave = () => setIgnored(true);
+
+    flow.companion.setMouseEventsIgnored(true).catch(() => {});
+    window.addEventListener('mousemove', handleMouseMove);
+    window.addEventListener('mouseleave', handleMouseLeave);
+
+    return () => {
+      window.removeEventListener('mousemove', handleMouseMove);
+      window.removeEventListener('mouseleave', handleMouseLeave);
+      flow.companion.setMouseEventsIgnored(false).catch(() => {});
+    };
+  }, [enabled, flow]);
+}
+
+function useCompanionContentSize(
+  flow: FlowElectronApi | undefined,
+  shellRef: RefObject<HTMLElement | null>,
+  mode: CompanionContentMode,
+  enabled: boolean,
+) {
+  useEffect(() => {
+    if (flow == null || !enabled) return;
+    const shell = shellRef.current;
+    if (shell == null) return;
+
+    let animationFrame: number | null = null;
+    const resizeToContent = () => {
+      const content = shell.querySelector<HTMLElement>(
+        '.companion-pill, .companion-card',
+      );
+      if (content == null) return;
+      const contentHeight = Math.max(
+        content.scrollHeight,
+        content.getBoundingClientRect().height,
+      );
+      flow.companion
+        .setContentSize({
+          width: COMPANION_WINDOW_WIDTH[mode],
+          height: Math.ceil(contentHeight + COMPANION_WINDOW_VERTICAL_PADDING),
+        })
+        .catch(() => {});
+    };
+    const scheduleResize = () => {
+      if (animationFrame != null) {
+        cancelAnimationFrame(animationFrame);
+      }
+      animationFrame = requestAnimationFrame(() => {
+        animationFrame = null;
+        resizeToContent();
+      });
+    };
+
+    const observer = new ResizeObserver(scheduleResize);
+    observer.observe(shell);
+    const content = shell.querySelector<HTMLElement>(
+      '.companion-pill, .companion-card',
+    );
+    if (content != null) observer.observe(content);
+    scheduleResize();
+
+    return () => {
+      if (animationFrame != null) cancelAnimationFrame(animationFrame);
+      observer.disconnect();
+    };
+  }, [enabled, flow, mode, shellRef]);
+}
+
 function MeetingCard(props: {
   mode: 'detected' | 'recording';
   meetings: MeetingRuntimeState & {
     startTranscription: (
       detectionId: string | undefined,
       consentAccepted: boolean,
+      sources?: MeetingAudioSource[],
     ) => Promise<MeetingRuntimeState>;
     stopTranscription: (meetingId: string) => Promise<MeetingRuntimeState>;
     dismissDetection: (detectionId: string) => Promise<MeetingRuntimeState>;
   };
-  onStart: () => void;
+  onStart: (sources: MeetingAudioSource[]) => void;
   onStop: () => void;
   onDismiss: () => void;
 }) {
   const detection = props.meetings.currentDetection;
   const recording = props.meetings.activeRecording;
+  const transcriptChunkCount = props.meetings.transcriptProgress.chunkCount;
+  const sourceLabel = recording?.sources.includes('system')
+    ? recording.sources.includes('microphone')
+      ? 'meeting audio + microphone'
+      : 'meeting audio'
+    : 'microphone';
   const title =
     props.mode === 'recording'
-      ? 'Transcribing'
+      ? recording?.status === 'finalizing'
+        ? 'Finalizing'
+        : transcriptChunkCount > 0
+        ? 'Transcribing'
+        : 'Recording'
       : detection?.calendarEventTitle ?? 'In a meeting?';
   const body =
     props.mode === 'recording'
-      ? `Flow is listening for meeting audio. ${props.meetings.transcriptProgress.chunkCount} transcript chunks so far.`
+      ? recording?.status === 'finalizing'
+        ? 'Flow is finalizing the recording and preparing transcript notes.'
+        : transcriptChunkCount > 0
+        ? `Flow is recording ${sourceLabel}. ${transcriptChunkCount} transcript chunk${transcriptChunkCount === 1 ? '' : 's'} captured.`
+        : `Flow is recording ${sourceLabel}. Transcript notes will appear after you stop.`
       : detection?.reasons[0] ??
         'Flow noticed a likely meeting and can start notes when you say so.';
   return (
@@ -171,9 +300,16 @@ function MeetingCard(props: {
             <button
               type="button"
               className="button-primary"
-              onClick={props.onStart}
+              onClick={() => props.onStart(['system', 'microphone'])}
             >
-              Start notes
+              Record meeting
+            </button>
+            <button
+              type="button"
+              className="button-secondary"
+              onClick={() => props.onStart(['microphone'])}
+            >
+              Mic only
             </button>
             <button
               type="button"
@@ -308,21 +444,6 @@ function FlowMark(props: { state: CompanionRuntimeState }) {
       aria-hidden="true"
     >
       <img src={flowIconUrl} alt="" />
-    </span>
-  );
-}
-
-function ActivityTrace(props: { state: CompanionRuntimeState }) {
-  return (
-    <span
-      className={`companion-activity-trace companion-activity-trace--${props.state}`}
-      aria-hidden="true"
-    >
-      <span />
-      <span />
-      <span />
-      <span />
-      <span />
     </span>
   );
 }

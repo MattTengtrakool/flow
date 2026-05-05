@@ -202,6 +202,8 @@ function mapCalendarItemToBlock(
       },
     },
     apps: [],
+    projects: item.location.trim().length > 0 ? [item.location] : [],
+    tasks: item.kind === 'task' ? [item.title] : [],
     repos: [],
     tickets: [],
     documents: [],

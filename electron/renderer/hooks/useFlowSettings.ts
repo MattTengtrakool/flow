@@ -31,6 +31,7 @@ export const DEFAULT_FLOW_SETTINGS: FlowSettings = {
   },
   proactive: DEFAULT_PROACTIVE_SETTINGS,
   meetingAssistant: DEFAULT_MEETING_ASSISTANT_SETTINGS,
+  customCategories: [],
   apiKeys: {
     gemini: missingKeyStatus,
     anthropic: missingKeyStatus,

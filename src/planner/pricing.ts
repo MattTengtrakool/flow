@@ -54,7 +54,7 @@ const PRICING_TABLE: Array<{ match: RegExp; pricing: ModelPricing }> = [
       friendlyName: 'Claude Opus 4.5+',
     },
   },
-  // Claude Opus 4 / 4.1 — legacy premium pricing
+  // Claude Opus 4 / 4.1 pricing
   {
     match: /^claude-opus-4(?:-[0-4])?(?:\b|[-_])/i,
     pricing: {
@@ -64,7 +64,7 @@ const PRICING_TABLE: Array<{ match: RegExp; pricing: ModelPricing }> = [
       friendlyName: 'Claude Opus 4.1',
     },
   },
-  // Claude Opus 3 (legacy / deprecated)
+  // Claude Opus 3 pricing
   {
     match: /^(?:claude-opus-3|claude-3-opus)/i,
     pricing: {
@@ -94,7 +94,7 @@ const PRICING_TABLE: Array<{ match: RegExp; pricing: ModelPricing }> = [
       friendlyName: 'Claude Sonnet 3.7',
     },
   },
-  // Claude Sonnet 3 (legacy)
+  // Claude Sonnet 3 pricing
   {
     match: /^(?:claude-sonnet-3|claude-3-sonnet)/i,
     pricing: {

@@ -48,7 +48,13 @@ export function syncCompanionWindow(payload: ProactiveState) {
   );
   if (window == null) return;
 
-  const size = payload.activeInsight == null ? PILL_BOUNDS : CARD_BOUNDS;
+  const current = window.getBounds();
+  const size =
+    current.width > 0 && current.height > 0
+      ? { width: current.width, height: current.height }
+      : payload.activeInsight == null
+      ? PILL_BOUNDS
+      : CARD_BOUNDS;
   applyCompanionBounds(
     window,
     companionBoundsForSettings(payload.settings, size),
@@ -59,6 +65,35 @@ export function syncCompanionWindow(payload: ProactiveState) {
   } else {
     window.hide();
   }
+}
+
+export function resizeCompanionWindowToContent(
+  window: BrowserWindow,
+  size: Pick<Electron.Rectangle, 'width' | 'height'>,
+) {
+  const current = window.getBounds();
+  const { workArea } = screen.getDisplayNearestPoint({
+    x: current.x + Math.round(current.width / 2),
+    y: current.y + Math.round(current.height / 2),
+  });
+  const settings = settingsService.publicSettings().proactive;
+  const nextWidth = clampNumber(
+    Math.ceil(size.width),
+    180,
+    Math.max(180, workArea.width - SCREEN_MARGIN * 2),
+  );
+  const nextHeight = clampNumber(
+    Math.ceil(size.height),
+    96,
+    Math.max(96, workArea.height - SCREEN_MARGIN * 2),
+  );
+  const nextBounds = anchorResizeBounds(
+    current,
+    { width: nextWidth, height: nextHeight },
+    settings,
+    workArea,
+  );
+  applyCompanionBounds(window, nextBounds);
 }
 
 function scheduleCompanionPositionPersist(window: BrowserWindow) {
@@ -146,4 +181,34 @@ function clampBoundsToWorkArea(
     x: Math.min(Math.max(bounds.x, workArea.x + SCREEN_MARGIN), maxX),
     y: Math.min(Math.max(bounds.y, workArea.y + SCREEN_MARGIN), maxY),
   };
+}
+
+function anchorResizeBounds(
+  current: Electron.Rectangle,
+  size: Pick<Electron.Rectangle, 'width' | 'height'>,
+  settings: ProactiveSettings,
+  workArea: Electron.Rectangle,
+): Electron.Rectangle {
+  let x = current.x;
+  let y = current.y;
+
+  if (settings.companionCustomPosition == null) {
+    if (
+      settings.companionPosition === 'bottom-right' ||
+      settings.companionPosition === 'right-center'
+    ) {
+      x = current.x + current.width - size.width;
+    }
+    if (settings.companionPosition !== 'right-center') {
+      y = current.y + current.height - size.height;
+    } else {
+      y = workArea.y + Math.round((workArea.height - size.height) / 2);
+    }
+  }
+
+  return clampBoundsToWorkArea({ x, y, ...size }, workArea);
+}
+
+function clampNumber(value: number, min: number, max: number): number {
+  return Math.min(Math.max(value, min), max);
 }
